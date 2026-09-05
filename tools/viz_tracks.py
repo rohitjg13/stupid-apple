@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from dataclasses import replace
 
 import cv2
 import numpy as np
@@ -85,21 +86,53 @@ def draw_zones(canvas, cfg, stream):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", default="config/sim")
+    ap.add_argument("--video", default=None,
+                    help="test any video file directly; builds a throwaway clipset")
+    ap.add_argument("--bg-lr", type=float, default=0.005,
+                    help="MOG2 learning rate. Lower = remembers stationary people "
+                         "for longer, but adapts to lighting more slowly")
+    ap.add_argument("--morph", type=int, default=1,
+                    help="morphological opening passes; raise to 2 to kill noise")
+    ap.add_argument("--high-area", type=int, default=None,
+                    help="blob area that counts as a confident detection. Lower it "
+                         "when people are small in frame")
     ap.add_argument("--source", default="sim", choices=["sim", "file", "camera"])
     ap.add_argument("--backend", default="sim", choices=["sim", "reference", "pl"])
     ap.add_argument("--frames", type=int, default=300)
     ap.add_argument("--stream", default="overhead")
     ap.add_argument("--out", default=None, help="write an mp4 instead of a window")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--fps", type=float, default=25.0, help="playback fps for --video")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
 
     from main import build_backend, build_source
-    cfg = load_clipset(a.config)
+
+    config = a.config
+    if a.video:
+        # Copy the clipset and point it at this file, so any video can be tried
+        # without hand-editing a store.yaml.
+        import shutil, tempfile
+        from pathlib import Path
+        config = Path(tempfile.mkdtemp()) / "clipset"
+        shutil.copytree(a.config, config)
+        y = config / "store.yaml"
+        y.write_text(y.read_text().replace(
+            "overhead: {source: sim, fps: 15, loop: true}",
+            f"overhead: {{source: file, path: {Path(a.video).resolve()}, "
+            f"fps: {a.fps}, loop: false}}"))
+        a.source, a.backend = "file", "reference"
+        log.info("testing %s", a.video)
+    cfg = load_clipset(config)
     src = build_source(a.source, cfg, a.stream, seed=a.seed)
     be = build_backend(a.backend, cfg)
+    if a.backend == "reference":
+        from pl.reference import ReferenceBackend
+        be = ReferenceBackend(cfg, lr=a.bg_lr, morph_iters=a.morph)
 
-    p = TrackerParams.load(a.config)
+    p = TrackerParams.load(config)
+    if a.high_area:
+        p = replace(p, high_area=a.high_area)
     tracker, wires = Tracker(p), TripwireCounter(cfg.tripwires, p, stream=a.stream)
     zmap = ZoneMap(cfg.zones) if cfg.zones else None
     Hm = cfg.homography.get(a.stream)
@@ -108,7 +141,7 @@ def main(argv=None):
     if a.out:
         writer = cv2.VideoWriter(a.out, cv2.VideoWriter_fourcc(*"mp4v"),
                                  src.fps, (W, H))
-    shown = 0
+    shown, counted = 0, []
     try:
         for frame in src.frames():
             if shown >= a.frames:
@@ -140,12 +173,17 @@ def main(argv=None):
                 cv2.imshow("tracks", canvas)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
+            counted.append(len(tracks))
             shown += 1
     finally:
         src.close()
         if writer is not None:
             writer.release()
+            warm = counted[100:] or counted
             log.info("wrote %s (%d frames)", a.out, shown)
+            log.info("people tracked: mean %.2f, max %d, seen in %d/%d frames",
+                     sum(warm) / max(len(warm), 1), max(warm or [0]),
+                     sum(1 for c in warm if c), len(warm))
         else:
             cv2.destroyAllWindows()
     return 0
