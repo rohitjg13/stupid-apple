@@ -1,0 +1,8 @@
+[
+  {"id": "A1", "stream": "shelf", "x": 150, "y": 45,  "w": 45, "h": 35, "empty_below": 50, "low_below": 95},
+  {"id": "A2", "stream": "shelf", "x": 200, "y": 45,  "w": 45, "h": 35, "empty_below": 50, "low_below": 95},
+  {"id": "B1", "stream": "shelf", "x": 150, "y": 85,  "w": 45, "h": 35, "empty_below": 50, "low_below": 95},
+  {"id": "B2", "stream": "shelf", "x": 200, "y": 85,  "w": 45, "h": 35, "empty_below": 50, "low_below": 95},
+  {"id": "C1", "stream": "shelf", "x": 150, "y": 125, "w": 45, "h": 35, "empty_below": 50, "low_below": 95},
+  {"id": "C2", "stream": "shelf", "x": 200, "y": 125, "w": 45, "h": 35, "empty_below": 50, "low_below": 95}
+]
