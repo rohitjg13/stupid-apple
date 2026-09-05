@@ -33,24 +33,28 @@ See `docs/BOARD.md`. Short version: `tools/deploy.sh`, then
 
 ## Dashboard (Svelte + Vite)
 
-The frontend dashboard is built with Svelte and Vite.
+The frontend dashboard is located in `frontend/`.
 
 ```bash
+cd frontend
 npm install
 npm run dev
 ```
 
-## Layout
+## Directory Structure
 
-| Path | What |
+| Path | Description |
 |---|---|
-| `pl/` | Contract A: the 856-byte `FrameResult`, register map, reference model |
-| `core/` | Contract B: events, bus, config validation, RTC-less clock |
-| `sources/` | sim, file, camera — all yield `Frame` |
-| `geometry/` | image↔floor homography, zone raster, calibration tool |
-| `tools/` | perf, backend comparison, accuracy evaluation, deploy, transcode |
-| `docs/` | shared context, plans, demo script, test protocol, DPDP, risks, cuts |
-| `src/` | Svelte frontend dashboard source code |
+| `frontend/` | Svelte + Vite web dashboard source & assets (`mridhula` branch) |
+| `shopper/` | Shopper tracking, heatmaps, dwell times & tripwires (`nishita` branch) |
+| `shelf/` | Stockout monitoring, pick detection & planogram compliance (`pustak` branch) |
+| `backend/` | Database, API, POS stub, queue intelligence & cloud sync (`mrkr` branch) |
+| `core/` | Event envelope, message bus, clock & config validation (`main` branch) |
+| `pl/` | Contract A: 856-byte `FrameResult`, register maps, YOLO & reference backends |
+| `sources/` | Video file, camera live feed, and synthetic simulation input sources |
+| `geometry/` | Homography calibration & zone rasterization |
+| `tools/` | Performance, accuracy evaluation, video rendering, and deployment scripts |
+| `docs/` | Shared documentation, architectural plans, demo scripts, DPDP, and risks |
 
 ## Rules that are not negotiable
 
