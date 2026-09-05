@@ -1,0 +1,22 @@
+[Unit]
+Description=Retail analytics (PYNQ-Z2)
+After=multi-user.target
+# Deliberately not After=network-online.target: the demo must run with no network.
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/xilinx/retail
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /home/xilinx/retail/main.py \
+  --config /home/xilinx/retail/config/demo \
+  --source file --backend pl \
+  --health-file /var/lib/retail/health.json \
+  --clock-state /var/lib/retail/clock.json
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

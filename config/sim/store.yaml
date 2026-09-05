@@ -1,0 +1,7 @@
+store_id: demo-01
+streams:
+  overhead: {source: sim, fps: 15, loop: true}
+  shelf:    {source: sim, fps: 5}
+checkout: {counters: 2, target_wait_s: 180}
+pos: {source: stub}
+cloud: {enabled: false, url: null}
