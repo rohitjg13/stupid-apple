@@ -33,10 +33,10 @@ class JsonLines(logging.Formatter):
         return json.dumps(out)
 
 
-def build_source(source, cfg, stream):
+def build_source(source, cfg, stream, seed=0):
     if source == "sim":
         from sources.sim import SimSource
-        return SimSource(cfg, stream=stream)
+        return SimSource(cfg, stream=stream, seed=seed)
     if source == "file":
         from sources.file import FileSource
         return FileSource(cfg, stream=stream)
@@ -105,13 +105,14 @@ def write_health(path, payload):
 
 def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
         streams=("overhead", "shelf"), stop=None, clock=None, health_file=None,
-        clock_state="/var/lib/retail/clock.json"):
+        clock_state="/var/lib/retail/clock.json", seed=0):
     cfg = load_clipset(config)
     check_backend(backend)
     bus = bus or Bus()
     stop = stop or threading.Event()      # per-run: run() must be re-callable in one process
 
-    sources = {s: build_source(source if cfg.streams[s].get("source") != "sim" else "sim", cfg, s)
+    sources = {s: build_source(source if cfg.streams[s].get("source") != "sim" else "sim",
+                               cfg, s, seed=seed)
                for s in streams}
     be = build_backend(backend, cfg)
     q = queue.Queue(maxsize=2)
@@ -186,6 +187,7 @@ def main(argv=None):
     p.add_argument("--headless", action="store_true")
     p.add_argument("--health-file", default=None, help="JSON status for the backend /health")
     p.add_argument("--clock-state", default="/var/lib/retail/clock.json")
+    p.add_argument("--seed", type=int, default=0, help="sim determinism")
     rt = p.add_mutually_exclusive_group()
     rt.add_argument("--realtime", dest="realtime", action="store_true", default=True)
     rt.add_argument("--fast", dest="realtime", action="store_false")
@@ -203,7 +205,8 @@ def main(argv=None):
     bus.subscribe("occupancy", lambda e: log.info("occupancy", extra={"count": e.payload["count"]}))
     try:
         run(a.config, a.source, a.backend, a.frames, a.realtime and not a.headless,
-            bus=bus, stop=stop, health_file=a.health_file, clock_state=a.clock_state)
+            bus=bus, stop=stop, health_file=a.health_file, clock_state=a.clock_state,
+            seed=a.seed)
     finally:
         bus.drain()
     return 0

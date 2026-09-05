@@ -176,3 +176,34 @@ class SimSource(Source):
                             {"lane": int(rng.integers(1, 3)), "items": n,
                              "amount": round(n * item["unit_price"] * rng.uniform(0.8, 1.4), 2),
                              "zone_hint": "checkout"})
+
+
+def main(argv=None):
+    """Backfill for the backend lead:
+
+        python -m sources.sim --history-days 7 > history.jsonl
+    """
+    import argparse
+    import os
+    import sys
+
+    from core.config import load_clipset
+
+    ap = argparse.ArgumentParser(description="synthetic store")
+    ap.add_argument("--config", default="config/sim")
+    ap.add_argument("--history-days", type=float, default=7.0)
+    ap.add_argument("--step-s", type=float, default=60.0)
+    ap.add_argument("--seed", type=int, default=0)
+    a = ap.parse_args(argv)
+
+    src = SimSource(load_clipset(a.config), stream="overhead", seed=a.seed)
+    try:
+        for event in src.history(days=a.history_days, step_s=a.step_s):
+            print(event.to_json())
+    except BrokenPipeError:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())   # `| head` is fine
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
