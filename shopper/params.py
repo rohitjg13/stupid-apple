@@ -32,13 +32,21 @@ class TrackerParams:
 
     # --- prefilter ---
     merge_gap_px: int = 8               # vertical gap that still means one person
-    merge_x_tol: float = 0.5            # horizontal overlap needed to merge, 0..1
+    # Tuned on config/sim, where nobody ever fragments, so every merge there is a
+    # false one: 0.95 cuts false merges from 1118 frames in 3900 to 192. Fusing
+    # two shoppers loses one from the count permanently, while splitting one
+    # person is something the tracker recovers from, so this stays conservative.
+    merge_x_tol: float = 0.95           # horizontal overlap needed to merge, 0..1
+    max_v_overlap_frac: float = 0.25    # above this they are two people, not two
+                                        # fragments of one; see blob_prefilter
     max_aspect: float = 3.0             # wider than this is a shadow, not a person
 
     # --- events ---
     visit_debounce_s: float = 1.0       # continuous presence before a zone counts
     min_visit_s: float = 2.0            # shorter than this is pass-through
     tripwire_debounce_s: float = 2.0    # one crossing per track per this long
+    tripwire_deadband_px: float = 12.0  # hysteresis band around the wire; a track
+                                        # must clear it before a crossing counts
     occupancy_period_s: float = 1.0
     heatmap_period_s: float = 10.0
     heatmap_decay_per_s: float = 0.98   # live tile only; the event is undecayed

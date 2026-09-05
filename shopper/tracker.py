@@ -182,9 +182,18 @@ class Tracker:
         # they come apart. So nobody measures it: every claimant coasts on its own
         # motion model until the blobs separate, bounded by overlap_grace.
         contested, claimants = set(), {}
+        best = (np.argmax(iou, axis=1) if iou.size else np.zeros(0, dtype=int))
         for dj in range(len(boxes)):
+            # A claimant is a confirmed track whose *own best* match is this blob,
+            # at the confident threshold. Both halves matter: without "best" a
+            # track that has a perfectly good blob of its own still gets dragged
+            # into a neighbour's merge, and at the loose threshold two people
+            # merely walking near each other look merged. Either mistake starves
+            # real tracks of measurements, so they drift, die and respawn -- 9.6x
+            # id churn on config/sim, and more tracked people than there are.
             claim = [ti for ti in range(len(self.tracks))
-                     if self.tracks[ti].state == CONFIRMED and iou[ti, dj] >= p.iou_low]
+                     if self.tracks[ti].state == CONFIRMED
+                     and best[ti] == dj and iou[ti, dj] >= p.iou_high]
             with_grace = [ti for ti in claim
                           if self.tracks[ti].shared_frames < p.overlap_grace]
             if len(claim) >= 2 and len(with_grace) >= 2:
