@@ -130,11 +130,45 @@ fragmentation, shadows or noise, which is exactly what the prefilter exists for.
   through the wall from the checkout, missing the door's u-span of 40–240
   entirely, and loitered on the exit once routed through it.
 
+## YOLO on the Jetson
+
+The team's board is a **Jetson Nano**, not the PYNQ-Z2 the shared docs assume
+(those are Rohit's to update). That removes the compute constraint that ruled
+out a neural detector, so `pl/yolo.py` provides `--backend yolo`: a YOLOv8
+person detector packed into the same frozen `FrameResult`. The tracker and
+everything downstream are unchanged -- they only ever saw boxes.
+
+What changes, measured on `vid/arcade1.mp4` (one shopper walks in and browses,
+eye-level, lit shelf):
+
+| | MOG2 (best tuned) | YOLO (defaults) |
+|---|---|---|
+| Warm-up | 100 frames blind | none |
+| Frames with someone tracked | 545 / 669 | **635 / 769** |
+| The shopper | head + feet fragments, several ids | **one full-body track, 15 s** |
+| False "browsers" | window reflection, snack box | none |
+| Shopper at the far counter | never seen | tracked, 8 s dwell |
+
+The whole stationary-hold / furniture-filter apparatus stays in the tracker and
+is harmless under YOLO (it rarely triggers), but it exists for background
+subtraction. `roi_fill` and `lane_occupancy` still come from the reference chain,
+and the shelf stream is delegated to it entirely: a person detector has nothing
+to say about a shelf.
+
+```
+tools/try_video.sh vid/arcade1.mp4 --detector yolo
+python main.py --source file --backend yolo --config config/<clipset>
+```
+
+`ultralytics` is an optional extra (`pip install -e '.[yolo]'`), imported only
+inside `pl/yolo.py`. On the Jetson export the model to TensorRT for real-time.
+
 ## Trying a clip
 
 ```
 tools/try_video.sh vid/arcade1.mp4                       # any video, one command
 tools/try_video.sh vid/arcade1.mp4 --bg-lr 0.0005 --morph 2
+tools/try_video.sh vid/arcade1.mp4 --detector yolo
 ```
 
 Runs the real chain (video → OpenCV background subtraction → tracker) with no

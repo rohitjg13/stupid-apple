@@ -54,6 +54,9 @@ def build_backend(backend, cfg):
     if backend == "reference":
         from pl.reference import ReferenceBackend
         return ReferenceBackend(cfg)
+    if backend == "yolo":
+        from pl.yolo import YoloBackend
+        return YoloBackend(cfg)
     if backend == "pl":
         try:
             from pl import driver
@@ -64,7 +67,7 @@ def build_backend(backend, cfg):
         # Khushwant owns pl/driver.py. Accept either shape his plan allows:
         # a Driver class, or module-level process()/read_latency_cycles().
         return driver.Driver(cfg) if hasattr(driver, "Driver") else driver
-    raise SystemExit(f"unknown --backend {backend!r}; expected sim, reference or pl")
+    raise SystemExit(f"unknown --backend {backend!r}; expected sim, reference, yolo or pl")
 
 
 def check_backend(backend):
@@ -184,7 +187,7 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
 def main(argv=None):
     p = argparse.ArgumentParser(description="Intelligent retail analytics on PYNQ-Z2")
     p.add_argument("--source", default="sim", choices=["sim", "file", "camera"])
-    p.add_argument("--backend", default="sim", choices=["sim", "reference", "pl"])
+    p.add_argument("--backend", default="sim", choices=["sim", "reference", "yolo", "pl"])
     p.add_argument("--config", default="config/sim")
     p.add_argument("--frames", type=int, default=0, help="0 = run forever")
     p.add_argument("--headless", action="store_true")

@@ -157,6 +157,10 @@ def main(argv=None):
     ap.add_argument("--high-area", type=int, default=None,
                     help="confident-blob area; lower when people are small in frame")
     ap.add_argument("--no-heat", action="store_true", help="don't paint the heatmap")
+    ap.add_argument("--detector", default="mog2", choices=["mog2", "yolo"],
+                    help="mog2 = background subtraction (the FPGA chain); yolo = "
+                         "person detector (Jetson). yolo sees people who stand still")
+    ap.add_argument("--conf", type=float, default=0.3, help="yolo confidence threshold")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -192,6 +196,10 @@ def main(argv=None):
     if a.backend == "reference":
         from pl.reference import ReferenceBackend
         be = ReferenceBackend(cfg, lr=a.bg_lr, morph_iters=a.morph)
+        if a.detector == "yolo":
+            from pl.yolo import YoloBackend
+            be = YoloBackend(cfg, conf=a.conf, reference=be)
+            log.info("detector: yolo (conf %.2f) -- no warm-up, whole-body boxes", a.conf)
 
     p = TrackerParams.load(config)
     if a.high_area:
@@ -273,7 +281,7 @@ def main(argv=None):
             cv2.destroyAllWindows()
 
     # --- report -----------------------------------------------------------
-    warm_counts = counted[100:] or counted
+    warm_counts = (counted[100:] or counted) if a.detector == "mog2" else counted
     if a.out:
         log.info("wrote %s (%d frames)", a.out, shown)
     log.info("people tracked: mean %.2f, max %d, seen in %d/%d frames",

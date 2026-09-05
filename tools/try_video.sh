@@ -3,6 +3,7 @@
 #
 #   tools/try_video.sh vid/arcade1.mp4
 #   tools/try_video.sh vid/arcade1.mp4 --bg-lr 0.0005 --morph 2     # extra knobs pass through
+#   tools/try_video.sh vid/arcade1.mp4 --detector yolo               # person detector (Jetson)
 #
 # Writes out/<name>_tracked.mp4 and out/<name>_tracked.json, prints the report,
 # then opens the video. Layout-free: no door, no zones, no floor calibration --

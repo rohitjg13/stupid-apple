@@ -4,6 +4,9 @@ version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = ["numpy", "opencv-python-headless", "fastapi", "uvicorn", "pyyaml", "scipy"]
 
+[project.optional-dependencies]
+yolo = ["ultralytics"]          # --backend yolo on the Jetson; never imported otherwise
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["error::DeprecationWarning"]
