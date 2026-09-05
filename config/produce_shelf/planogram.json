@@ -1,0 +1,38 @@
+[
+  {
+    "facing": "SHELF-TOP",
+    "sku": "PROD-SALAD-MIX",
+    "name": "Organic Salad Mix",
+    "unit_price": 120.0,
+    "initial_stock": 8,
+    "low_threshold": 3,
+    "expected_sales_per_hour": 6
+  },
+  {
+    "facing": "SHELF-CUCUMBER",
+    "sku": "PROD-CUCUMBER",
+    "name": "English Cucumbers",
+    "unit_price": 40.0,
+    "initial_stock": 15,
+    "low_threshold": 5,
+    "expected_sales_per_hour": 10
+  },
+  {
+    "facing": "SHELF-PEPPERS",
+    "sku": "PROD-BELL-PEPPER",
+    "name": "Tri-Color Bell Peppers",
+    "unit_price": 80.0,
+    "initial_stock": 12,
+    "low_threshold": 4,
+    "expected_sales_per_hour": 8
+  },
+  {
+    "facing": "SHELF-LETTUCE",
+    "sku": "PROD-LETTUCE",
+    "name": "Romaine Crisp Lettuce",
+    "unit_price": 50.0,
+    "initial_stock": 20,
+    "low_threshold": 6,
+    "expected_sales_per_hour": 12
+  }
+]

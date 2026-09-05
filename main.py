@@ -138,6 +138,11 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
     epoch_base, ns_base = clock.now(), {}      # per stream: each has its own t_ns origin
     last_health = 0.0
     t_wall = time.monotonic()
+    shelf_pipe = None
+    if "shelf" in streams and cfg.rois and cfg.planogram:
+        from shelf.pipeline import ShelfPipeline
+        shelf_pipe = ShelfPipeline(rois=cfg.rois, planogram=cfg.planogram, store_id=cfg.store_id, bus=bus)
+
     while finished < len(sources):
         item = q.get()
         if item is None:
@@ -158,6 +163,8 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
                     last_pub[roi_id] = t
                     bus.publish(Event(t, cfg.store_id, "shelf", roi_id, "shelf_fill",
                                       {"fill": int(frame.result["roi_fill"][i])}))
+            if shelf_pipe is not None:
+                shelf_pipe.process_frame(t=t, result=frame.result, image=frame.image)
 
         processed += 1
         if t - last_health >= 10.0:

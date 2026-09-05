@@ -1,0 +1,7 @@
+store_id: demo-shelf
+streams:
+  overhead: {source: sim, fps: 15, loop: true}
+  shelf:    {source: file, path: ref_vid/VID-20260906-WA0004.mp4, fps: 15, loop: true}
+checkout: {counters: 2, target_wait_s: 180}
+pos: {source: stub}
+cloud: {enabled: false, url: null}

@@ -11,6 +11,9 @@ ssh_plan_new/
 results/
 vid/out/
 .commandcode
+scratch/
+*.pt
+ref_vid/
 
 # Frontend / Node
 logs

@@ -1,0 +1,8 @@
+[
+  {"facing": "A1", "sku": "NOODLE-CUP-01",  "name": "Nissin Cup Noodles",   "unit_price": 50, "expected_sales_per_hour": 10},
+  {"facing": "A2", "sku": "NOODLE-CUP-02",  "name": "Top Ramen Cup",        "unit_price": 45, "expected_sales_per_hour": 8},
+  {"facing": "B1", "sku": "SNACK-MIX-01",   "name": "Haldiram Bhujia",      "unit_price": 30, "expected_sales_per_hour": 12},
+  {"facing": "B2", "sku": "SNACK-MIX-02",   "name": "Kurkure Masala",       "unit_price": 20, "expected_sales_per_hour": 15},
+  {"facing": "C1", "sku": "BISCUIT-RED-01", "name": "Bourbon Chocolate",   "unit_price": 35, "expected_sales_per_hour": 9},
+  {"facing": "C2", "sku": "BISCUIT-RED-02", "name": "Britannia Good Day",   "unit_price": 25, "expected_sales_per_hour": 14}
+]

@@ -16,11 +16,15 @@ ROOT = Path(__file__).parent.parent
 
 @pytest.mark.parametrize("script", sorted(p.name for p in (ROOT / "tools").glob("*.sh")))
 def test_shell_scripts_parse(script):
+    if sys.platform.startswith("win"):
+        pytest.skip("Bash syntax check requires POSIX environment")
     assert subprocess.run(["bash", "-n", ROOT / "tools" / script]).returncode == 0
 
 
 @pytest.mark.parametrize("script", sorted(p.name for p in (ROOT / "tools").glob("*.sh")))
 def test_shell_scripts_are_executable_and_strict(script):
+    if sys.platform.startswith("win"):
+        pytest.skip("File executable bit check requires POSIX filesystem")
     p = ROOT / "tools" / script
     assert p.stat().st_mode & 0o111, "not executable"
     assert "set -euo pipefail" in p.read_text()
