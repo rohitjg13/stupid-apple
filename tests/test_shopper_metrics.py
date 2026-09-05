@@ -163,3 +163,45 @@ def test_a_visit_too_fragmented_to_match_is_a_miss_not_a_dwell_error():
 def test_metrics_that_could_not_be_computed_do_not_fail_the_run():
     """Missing labels mean unknown, not failed."""
     assert passes({"exit_count_error": None, "dwell_mae": None}) is True
+
+
+# --- results files for the accuracy slide ---------------------------------
+def test_a_result_file_is_written_per_clip(tmp_path):
+    from shopper.metrics import write_result
+    import json
+    p = write_result({"occupancy_mae": 0.5, "passes": True}, GT_PLAN06, tmp_path)
+    assert p.name == "overhead_01.json"
+    assert json.loads(p.read_text())["clip"] == "overhead_01"
+
+
+def test_summary_averages_across_clips(tmp_path):
+    from shopper.metrics import summarise, write_result
+    write_result({"occupancy_mae": 1.0, "passes": True},
+                 dict(GT_PLAN06, clip="a"), tmp_path)
+    write_result({"occupancy_mae": 2.0, "passes": True},
+                 dict(GT_PLAN06, clip="b"), tmp_path)
+    s = summarise(tmp_path)
+    assert s["n_clips"] == 2
+    assert s["occupancy_mae"] == pytest.approx(1.5)
+    assert s["all_passed"] is True
+
+
+def test_summary_reports_a_failing_clip(tmp_path):
+    from shopper.metrics import summarise, write_result
+    write_result({"passes": True}, dict(GT_PLAN06, clip="a"), tmp_path)
+    write_result({"passes": False}, dict(GT_PLAN06, clip="b"), tmp_path)
+    assert summarise(tmp_path)["all_passed"] is False
+
+
+def test_a_metric_no_clip_could_measure_stays_none(tmp_path):
+    from shopper.metrics import summarise, write_result
+    write_result({"dwell_mae": None}, dict(GT_PLAN06, clip="a"), tmp_path)
+    assert summarise(tmp_path)["dwell_mae"] is None
+
+
+def test_summary_excludes_itself_when_rerun(tmp_path):
+    from shopper.metrics import summarise, write_result
+    write_result({"occupancy_mae": 1.0, "passes": True},
+                 dict(GT_PLAN06, clip="a"), tmp_path)
+    summarise(tmp_path)
+    assert summarise(tmp_path)["n_clips"] == 1, "summary.json counted as a clip"

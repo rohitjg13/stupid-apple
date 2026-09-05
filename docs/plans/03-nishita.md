@@ -99,6 +99,13 @@ fragmentation, shadows or noise, which is exactly what the prefilter exists for.
   through the wall from the checkout, missing the door's u-span of 40–240
   entirely, and loitered on the exit once routed through it.
 
+## Performance
+
+`ShopperPipeline.on_frame` costs **0.62 ms mean / 1.08 ms p95** per frame on a
+laptop, over 2900 warm sim frames averaging 10.6 blobs. The budget is 8 ms on the
+board's 650 MHz A9, which is roughly an order of magnitude slower, so this is in
+the right ballpark but is **not** a substitute for measuring on hardware.
+
 ## Still to do
 
 - Re-tune the prefilter and tracker on real footage when the clipsets land; the
@@ -106,7 +113,14 @@ fragmentation, shadows or noise, which is exactly what the prefilter exists for.
   loses one permanently while splitting one is recoverable.
 - Profile on the board against the ≤ 8 ms/frame budget (needs hardware).
 - `evaluate.py` against hand-annotated ground truth once `footage/groundtruth/`
-  exists. `shopper/metrics.py` already accepts both circulating GT schemas.
+  exists. `shopper/metrics.py` already accepts both circulating GT schemas, and
+  writes `results/<clip>.json` plus a rolled-up `results/summary.json` so the
+  accuracy slide is generated rather than typed.
+- Optional same-view track re-link (a track ending at floor (X,Y) and a new one
+  starting within 1.5 m / 2 s is the same journey). Deliberately not built: the
+  plan says ship it only if it improves dwell MAE, and dwell MAE cannot be
+  measured until annotated clips exist.
+- The shopper slide for the deck (W6).
 
 ## Note for whoever writes the annotation tool
 

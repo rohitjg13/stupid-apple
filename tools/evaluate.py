@@ -14,6 +14,7 @@ import numpy as np
 from shopper.metrics import TARGETS as SHOPPER_TARGETS
 from shopper.metrics import evaluate_shopper
 from shopper.metrics import passes as shopper_passes
+from shopper.metrics import write_result
 
 log = logging.getLogger("evaluate")
 
@@ -95,12 +96,15 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("groundtruth")
     ap.add_argument("events", help="JSON lines, one Event per line")
+    ap.add_argument("--results-dir", default="results",
+                    help="where to write <clip>.json for the accuracy slide")
     a = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO)
     gt = load_groundtruth(a.groundtruth)
     events = [Event(**json.loads(l)) for l in Path(a.events).read_text().splitlines() if l.strip()]
     m = evaluate(events, gt)
+    log.info("wrote %s", write_result(m, gt, a.results_dir))
     print(json.dumps(m, indent=2))
     return 0 if m["passes"] else 1
 

@@ -16,6 +16,9 @@ scored without either side having to change first.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 
 TARGETS = {
@@ -139,3 +142,40 @@ def passes(metrics) -> bool:
         if value is not None and abs(value) > limit:
             return False
     return True
+
+
+def write_result(metrics, gt, results_dir="results") -> Path:
+    """Persist one clip's scores to `results/<clip>.json`.
+
+    The accuracy slide is generated from these files, never typed by hand, so
+    every number on it is traceable back to a run.
+    """
+    clip = gt.get("clip", "unknown")
+    d = Path(results_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"{clip}.json"
+    path.write_text(json.dumps({"clip": clip, **metrics}, indent=2, sort_keys=True))
+    return path
+
+
+def summarise(results_dir="results") -> dict:
+    """Roll every `results/<clip>.json` into one summary for the deck.
+
+    Means are taken over the clips where a metric could be computed; a metric
+    nothing could measure stays None rather than silently becoming 0.
+    """
+    d = Path(results_dir)
+    clips = sorted(p for p in d.glob("*.json") if p.name != "summary.json")
+    rows = [json.loads(p.read_text()) for p in clips]
+    # Keep a key that is None in every clip: "dwell: not measured" belongs on the
+    # slide, whereas a row that silently disappears reads as though it passed.
+    keys = {k for r in rows for k, v in r.items()
+            if v is None or (isinstance(v, (int, float)) and not isinstance(v, bool))}
+    summary = {"clips": [r.get("clip") for r in rows], "n_clips": len(rows)}
+    for k in sorted(keys):
+        vals = [r[k] for r in rows if isinstance(r.get(k), (int, float))
+                and not isinstance(r.get(k), bool)]
+        summary[k] = float(np.mean(vals)) if vals else None
+    summary["all_passed"] = bool(rows) and all(r.get("passes") for r in rows)
+    (d / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True))
+    return summary
