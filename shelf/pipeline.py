@@ -59,11 +59,19 @@ class ShelfPipeline:
         # Stockout & replenishment alerts
         so_events = self.stockout_tracker.update(t, readings)
 
-        # Inventory item-count / removal tracking based on fill changes
+        # Inventory item-count / removal tracking
         inv_events = []
         for facing, reading in readings.items():
-            evs = self.inventory_tracker.update_from_fractional_fill(t=t, facing=facing, fill_val=reading.smoothed_fill)
-            inv_events.extend(evs)
+            if reading.status == ShelfStatus.EMPTY:
+                evs = self.inventory_tracker.update_from_measurement(t=t, facing=facing, measured_qty=0)
+                inv_events.extend(evs)
+            elif reading.status == ShelfStatus.LOW:
+                item_init = self.inventory_tracker.items[facing].initial_stock if facing in self.inventory_tracker.items else 10
+                evs = self.inventory_tracker.update_from_measurement(t=t, facing=facing, measured_qty=int(item_init * 0.3))
+                inv_events.extend(evs)
+            else:
+                item_init = self.inventory_tracker.items[facing].initial_stock if facing in self.inventory_tracker.items else 10
+                self.inventory_tracker.update_from_measurement(t=t, facing=facing, measured_qty=item_init)
 
         # Customer hand reaching / pick interactions
         if image is not None:

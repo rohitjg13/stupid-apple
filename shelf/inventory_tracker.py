@@ -16,7 +16,8 @@ class ItemCountState:
     removed_count: int = 0
     added_count: int = 0
     unit_price: float = 0.0
-    low_threshold: int = 2
+    low_threshold: int = 3
+    confirmed_history: List[int] = field(default_factory=list)
 
 @dataclass
 class RemovalEvent:
@@ -33,8 +34,10 @@ class InventoryTracker:
         planogram: List[dict],
         store_id: str = "demo-01",
         default_initial_stock: int = 10,
+        confirmation_frames: int = 15, # Requires sustained drop across 15 frames (~1-2 sec) before committing
     ):
         self.store_id = store_id
+        self.confirmation_frames = confirmation_frames
         self.items: Dict[str, ItemCountState] = {}
         for p in planogram:
             facing = p["facing"]
@@ -50,12 +53,15 @@ class InventoryTracker:
                 low_threshold=low_thresh,
             )
         self.removal_history: List[RemovalEvent] = []
+        self._pending_candidates: Dict[str, List[int]] = {f: [] for f in self.items}
 
     def register_removal(self, t: float, facing: str, quantity: int = 1) -> List[Event]:
         if facing not in self.items or quantity <= 0:
             return []
         item = self.items[facing]
         actual_removed = min(quantity, item.current_stock)
+        if actual_removed == 0:
+            return []
         item.current_stock -= actual_removed
         item.removed_count += actual_removed
 
@@ -72,7 +78,6 @@ class InventoryTracker:
         )
 
         events = []
-        # Dispatches alert event
         if item.current_stock == 0:
             events.append(
                 Event(
@@ -115,25 +120,33 @@ class InventoryTracker:
             )
         return events
 
-    def update_from_fractional_fill(
+    def update_from_measurement(
         self,
         t: float,
         facing: str,
-        fill_val: float,
-        max_fill_expected: float = 180.0,
-        empty_fill_threshold: float = 50.0,
+        measured_qty: int,
     ) -> List[Event]:
         if facing not in self.items:
             return []
         item = self.items[facing]
-        # Map fill 0..255 to expected items remaining
-        span = max(1.0, max_fill_expected - empty_fill_threshold)
-        fraction = np.clip((fill_val - empty_fill_threshold) / span, 0.0, 1.0)
-        estimated_qty = int(round(fraction * item.initial_stock))
+        measured_qty = max(0, min(item.initial_stock, measured_qty))
 
-        if estimated_qty < item.current_stock:
-            diff = item.current_stock - estimated_qty
-            return self.register_removal(t=t, facing=facing, quantity=diff)
+        candidates = self._pending_candidates[facing]
+        candidates.append(measured_qty)
+        if len(candidates) > self.confirmation_frames:
+            candidates.pop(0)
+
+        # Only change stock when confirmed consistently across confirmation window
+        if len(candidates) >= self.confirmation_frames:
+            # Check if all or vast majority agree
+            mode_qty = max(set(candidates), key=candidates.count)
+            agreement_ratio = candidates.count(mode_qty) / float(len(candidates))
+
+            if agreement_ratio >= 0.85 and mode_qty < item.current_stock:
+                diff = item.current_stock - mode_qty
+                # Confirmed actual persistent removal
+                return self.register_removal(t=t, facing=facing, quantity=diff)
+
         return []
 
     def get_summary(self) -> Dict[str, dict]:
