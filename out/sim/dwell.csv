@@ -1,0 +1,13 @@
+person,first_seen_s,last_seen_s,present_s,standing_still_s,walked_px,mostly_in_region,mostly_in_zone
+0,6.8,39.93,33.2,28.2,298,middle-left,aisle_a
+1,6.8,39.93,32.27,25.87,258,bottom-centre,checkout
+2,10.27,39.93,29.73,23.07,338,bottom-centre,checkout
+3,12.0,39.93,28.0,20.27,461,middle-left,aisle_a
+4,17.27,39.93,22.73,16.47,472,bottom-right,checkout
+5,23.93,39.93,16.07,12.47,346,middle-left,aisle_a
+6,26.8,39.93,13.2,8.73,259,bottom-centre,checkout
+8,27.33,39.93,12.67,9.33,320,middle-left,aisle_a
+9,28.93,39.93,11.07,8.67,221,bottom-left,entrance
+10,31.53,39.93,8.47,4.8,351,top-left,aisle_a
+7,27.13,27.93,0.87,0.47,31,bottom-centre,entrance
+11,39.93,39.93,0.07,0.0,13,bottom-left,entrance

@@ -1,0 +1,5 @@
+from_s,to_s,people_present_mean,people_present_max,arrivals,departures
+0.0,10.0,0.64,2,2,0
+10.0,20.0,4.05,5,3,0
+20.0,30.0,6.29,9,5,1
+30.0,40.0,9.85,11,2,0

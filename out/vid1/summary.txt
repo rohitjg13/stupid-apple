@@ -1,0 +1,9 @@
+vid1.mp4  --  10.0 s, detector: yolo
+
+1. ENTRIES / EXITS   entered 0   exited 0
+   basis: frame edge -- proxy; configure a door line for real store entries
+2. FOOTFALL          mean 0.99 people present, peak 1, 1 distinct people tracked
+   over time: footfall.csv    by store zone: needs zones.json (--config)
+3. DWELL             1 people stood still >= 2 s, longest 9.84 s
+   per person: dwell.csv    near what: image regions (see dwell.csv); named displays need zones.json
+4. HEATMAP           heatmap.png   hottest: bottom-left (65 samples)

@@ -1,0 +1,32 @@
+{
+  "video": "sim",
+  "detector": "mog2",
+  "frames": 600,
+  "duration_s": 40.0,
+  "1_entries_exits": {
+    "entered": 6,
+    "exited": 1,
+    "basis": "configured door line"
+  },
+  "2_footfall": {
+    "people_present_mean": 5.21,
+    "people_present_max": 11,
+    "distinct_people_tracked": 12,
+    "by_zone": "see dwell.csv",
+    "by_time": "see footfall.csv"
+  },
+  "3_dwell": {
+    "people_who_stood_still_2s_or_more": 10,
+    "longest_still_s": 28.2,
+    "near": "image regions (see dwell.csv); named displays need zones.json"
+  },
+  "4_heatmap": {
+    "file": "heatmap.png",
+    "hottest": {
+      "x": 344,
+      "y": 376,
+      "region": "bottom-centre",
+      "foot_samples": 289
+    }
+  }
+}

@@ -1,0 +1,8 @@
+person,entered_view_from_edge,left_view_via_edge,basis
+2,0,0,frame edge (no door configured)
+3,0,0,frame edge (no door configured)
+6,0,0,frame edge (no door configured)
+9,0,1,frame edge (no door configured)
+11,1,0,frame edge (no door configured)
+20,0,0,frame edge (no door configured)
+25,1,0,frame edge (no door configured)

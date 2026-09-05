@@ -1,0 +1,5 @@
+from_s,entered,exited,basis
+0.0,0,0,configured door line
+10.0,2,0,configured door line
+20.0,3,1,configured door line
+30.0,1,0,configured door line

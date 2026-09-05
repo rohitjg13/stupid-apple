@@ -1,0 +1,32 @@
+{
+  "video": "vid/arcade1.mp4",
+  "detector": "yolo",
+  "frames": 769,
+  "duration_s": 25.6,
+  "1_entries_exits": {
+    "entered": 2,
+    "exited": 1,
+    "basis": "frame edge -- proxy; configure a door line for real store entries"
+  },
+  "2_footfall": {
+    "people_present_mean": 1.58,
+    "people_present_max": 4,
+    "distinct_people_tracked": 18,
+    "by_zone": "needs zones.json (--config)",
+    "by_time": "see footfall.csv"
+  },
+  "3_dwell": {
+    "people_who_stood_still_2s_or_more": 3,
+    "longest_still_s": 15.61,
+    "near": "image regions (see dwell.csv); named displays need zones.json"
+  },
+  "4_heatmap": {
+    "file": "heatmap.png",
+    "hottest": {
+      "x": 152,
+      "y": 200,
+      "region": "middle-left",
+      "foot_samples": 452
+    }
+  }
+}

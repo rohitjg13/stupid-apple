@@ -1,0 +1,4 @@
+person,first_seen_s,last_seen_s,present_s,standing_still_s,walked_px,mostly_in_region
+0,0.07,0.81,0.78,0.78,10,bottom-right
+5,5.17,5.72,0.57,0.57,3,bottom-right
+3,0.51,0.71,0.07,0.07,7,bottom-right
