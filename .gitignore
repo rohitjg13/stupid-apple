@@ -7,3 +7,4 @@ footage/
 *.egg-info/
 scratch/
 *.pt
+ref_vid/

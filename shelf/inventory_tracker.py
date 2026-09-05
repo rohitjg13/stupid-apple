@@ -64,6 +64,7 @@ class InventoryTracker:
             return []
         item.current_stock -= actual_removed
         item.removed_count += actual_removed
+        self._pending_candidates[facing] = [item.current_stock] * len(self._pending_candidates.get(facing, []))
 
         rev = actual_removed * item.unit_price
         self.removal_history.append(

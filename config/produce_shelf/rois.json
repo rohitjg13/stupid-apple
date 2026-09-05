@@ -1,0 +1,46 @@
+[
+  {
+    "id": "SHELF-TOP",
+    "stream": "shelf",
+    "x": 200,
+    "y": 10,
+    "w": 110,
+    "h": 40,
+    "empty_below": 30,
+    "low_below": 65,
+    "pick_monitor": true
+  },
+  {
+    "id": "SHELF-CUCUMBER",
+    "stream": "shelf",
+    "x": 215,
+    "y": 55,
+    "w": 100,
+    "h": 30,
+    "empty_below": 30,
+    "low_below": 65,
+    "pick_monitor": false
+  },
+  {
+    "id": "SHELF-PEPPERS",
+    "stream": "shelf",
+    "x": 200,
+    "y": 90,
+    "w": 115,
+    "h": 35,
+    "empty_below": 30,
+    "low_below": 65,
+    "pick_monitor": false
+  },
+  {
+    "id": "SHELF-LETTUCE",
+    "stream": "shelf",
+    "x": 140,
+    "y": 130,
+    "w": 170,
+    "h": 45,
+    "empty_below": 30,
+    "low_below": 65,
+    "pick_monitor": false
+  }
+]

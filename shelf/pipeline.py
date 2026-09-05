@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import numpy as np
 
 from core.bus import Bus
@@ -33,6 +33,7 @@ class ShelfPipeline:
         self.detector = ShelfEdgeDetector(model_type=detector_model) if use_detector else None
         self._roi_index = {r["id"]: i for i, r in enumerate(rois)}
         self._rois_raw = rois
+        self._last_active_picks: List[Any] = []
 
     def process_frame(
         self,
@@ -74,9 +75,28 @@ class ShelfPipeline:
                 self.inventory_tracker.update_from_measurement(t=t, facing=facing, measured_qty=item_init)
 
         # Customer hand reaching / pick interactions
+        active_picks = []
         if image is not None:
-            picks = self.pick_detector.detect_interactions(image, t)
-            # Log pick interaction if needed
+            active_picks = self.pick_detector.detect_interactions(image, t)
+            completed_picks = self.pick_detector.pop_completed_picks()
+            for cp in completed_picks:
+                pick_evs = self.inventory_tracker.register_removal(t=t, facing=cp.facing, quantity=1)
+                inv_events.extend(pick_evs)
+                inv_events.append(
+                    Event(
+                        t=t,
+                        store_id=self.store_id,
+                        stream="shelf",
+                        zone_id=cp.facing,
+                        event_type="alert",
+                        payload={
+                            "severity": "info",
+                            "rule": "customer_pick_detected",
+                            "message": f"Customer picked 1 item from {cp.facing} (confidence: {cp.confidence})",
+                        },
+                    )
+                )
+        self._last_active_picks = active_picks
 
         # Planogram compliance audit
         det_skus = None
@@ -107,3 +127,6 @@ class ShelfPipeline:
 
     def get_lost_revenue_estimate(self, facing: str, now_t: float) -> float:
         return self.stockout_tracker.get_lost_revenue_estimate(facing, now_t)
+
+    def get_active_picks(self) -> List[Any]:
+        return getattr(self, "_last_active_picks", [])
