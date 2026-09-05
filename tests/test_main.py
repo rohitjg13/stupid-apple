@@ -4,8 +4,11 @@ import sys
 
 import pytest
 
+import numpy as np
+
 from core.bus import Bus
-from main import build_source, run
+from core.config import load_clipset
+from main import build_backend, build_source, run
 
 
 def test_frame_budget_is_respected():
@@ -72,6 +75,43 @@ def test_pl_backend_refuses_to_start_without_a_board():
     """Never silently run reference while the judges are told it is the FPGA."""
     with pytest.raises(SystemExit):
         run(config="config/sim", source="sim", backend="pl", frames=1, realtime=False)
+
+
+def test_file_source_through_the_reference_backend(tmp_path):
+    """The W2 checkpoint: real footage, no board, blobs from pl/reference.py."""
+    import cv2
+    from tests.test_sources import make_clip
+
+    clip = make_clip(tmp_path / "c.avi", n=40)
+    cfg_dir = tmp_path / "cs"
+    import shutil
+    shutil.copytree("config/sim", cfg_dir)
+    store = (cfg_dir / "store.yaml").read_text().replace(
+        "overhead: {source: sim, fps: 15, loop: true}",
+        f"overhead: {{source: file, path: {clip}, fps: 15, loop: true}}")
+    (cfg_dir / "store.yaml").write_text(store)
+
+    bus = Bus()
+    occ = []
+    bus.subscribe("occupancy", occ.append)
+    n = run(config=cfg_dir, source="file", backend="reference", frames=200,
+            realtime=False, bus=bus, streams=("overhead",))
+    bus.drain()
+    assert n == 200
+    assert occ, "no occupancy events from footage"
+    assert max(e.payload["count"] for e in occ) >= 1, "the moving box was never detected"
+
+
+def test_backend_fills_in_the_frame_result():
+    cfg = load_clipset("config/sim")
+    be = build_backend("reference", cfg)
+    img = np.full((480, 640, 3), 30, np.uint8)
+    r = be.process(img, 0, 5)
+    assert int(r["frame_id"]) == 5
+
+
+def test_sim_backend_is_a_passthrough():
+    assert build_backend("sim", load_clipset("config/sim")) is None
 
 
 def test_unknown_source_fails_loudly():

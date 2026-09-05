@@ -44,6 +44,19 @@ def build_source(source, cfg, stream):
     raise SystemExit(f"unknown --source {source!r}; expected sim, file or camera")
 
 
+def build_backend(backend, cfg):
+    """None means the source already carries a FrameResult (sim)."""
+    if backend == "sim":
+        return None
+    if backend == "reference":
+        from pl.reference import ReferenceBackend
+        return ReferenceBackend(cfg)
+    if backend == "pl":
+        from pl import driver
+        return driver.Driver(cfg)
+    raise SystemExit(f"unknown --backend {backend!r}; expected sim, reference or pl")
+
+
 def check_backend(backend):
     """`--backend pl` must never silently degrade to reference on stage."""
     if backend != "pl":
@@ -81,6 +94,7 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
 
     sources = {s: build_source(source if cfg.streams[s].get("source") != "sim" else "sim", cfg, s)
                for s in streams}
+    be = build_backend(backend, cfg)
     q = queue.Queue(maxsize=2)
     threads = [threading.Thread(target=capture, args=(src, q, stop), daemon=True, name=f"cap-{s}")
                for s, src in sources.items()]
@@ -96,6 +110,9 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
             finished += 1
             continue
         frame = item
+        if be is not None and frame.image is not None:
+            frame.result = be.process(frame.image, 0 if frame.stream == "overhead" else 1,
+                                      frame.frame_id)
         base = ns_base.setdefault(frame.stream, frame.t_ns)
         t = epoch_base + (frame.t_ns - base) / 1e9         # SHARED.md §5: converted once
 
