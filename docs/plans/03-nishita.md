@@ -166,29 +166,34 @@ inside `pl/yolo.py`. On the Jetson export the model to TensorRT for real-time.
 ## Trying a clip
 
 ```
-tools/try_video.sh vid/arcade1.mp4                       # any video, one command
-tools/try_video.sh vid/arcade1.mp4 --bg-lr 0.0005 --morph 2
 tools/try_video.sh vid/arcade1.mp4 --detector yolo
+tools/try_video.sh vid/arcade1.mp4 --detector yolo --config config/mystore
 ```
 
-Runs the real chain (video → OpenCV background subtraction → tracker) with no
-door, zones or floor calibration, writes `out/<name>_tracked.mp4` and `.json`,
-prints who was present, how long they stood still and how far they walked to
-get there, paints a heatmap over the frame, and opens the result.
+One command, one report folder per video, one file per shopper-analytics
+question -- and honest about which need a per-camera config:
 
-Read the `seen in N/M frames` line first. Then the knobs, in the order they are
-usually needed on real footage:
+| File | Question | Layout-free | With `--config` |
+|---|---|---|---|
+| `entries_exits.csv` | 1. entering / exiting | proxy: tracks that appeared from or left via a frame *edge*, labelled as such | crossings of the configured door line, per time bucket |
+| `footfall.csv` | 2. footfall over time | people present, arrivals, departures per 10 s bucket | same, plus `mostly_in_zone` per person in `dwell.csv` |
+| `dwell.csv` | 3. dwell near products | per person: seconds present, seconds standing still, distance walked, image region | plus the named zone |
+| `heatmap.png` | 4. movement heatmap | cumulative foot positions over a still of the scene | same, with zone outlines |
+| `tracked.mp4`, `summary.txt/.json` | | annotated video; headline numbers | |
+
+"By day" is not a per-clip number: the backend aggregates `footfall_by_day`
+across runs. The heatmap is drawn **once, over a still**, not as a live overlay:
+history painted over live video reads as a person on fire and stays red after
+they leave. `--heat` adds a *decaying* glow to the video for those who want it.
+
+Knobs, in the order they are usually needed:
 
 | Symptom | Knob |
 |---|---|
-| Shoppers vanish when they stand still | `--bg-lr 0.0005` (default 0.005 is ~10× too fast for retail) |
-| Boxes on shelves, reflections, produce | `--morph 2` |
-| People visible but unboxed (small in frame) | `--high-area 600` |
+| Shoppers vanish when they stand still (mog2) | `--detector yolo`, or `--bg-lr 0.0005` |
+| Boxes on shelves, reflections, produce (mog2) | `--morph 2` |
+| People visible but unboxed, small in frame | `--high-area 600` (mog2) / `--conf 0.2` (yolo) |
 | Boxes flicker between ids | camera is too low; get it higher |
-
-The door line and zone labels only appear with a per-camera `--config`; without
-one they are deliberately not drawn, because the sim's floor plan painted over
-real footage is a lie.
 
 ## Performance
 

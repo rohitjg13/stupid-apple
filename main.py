@@ -130,7 +130,14 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
     for t in threads:
         t.start()
 
-    shopper = ShopperPipeline(cfg, bus)
+    shopper_params = None
+    if backend == "yolo":
+        # No background-subtraction noise to filter; the furniture filter could
+        # only retire real people who stood still from the first frame.
+        from dataclasses import replace
+        from shopper.params import TrackerParams
+        shopper_params = replace(TrackerParams.load(cfg.path), furniture_age=10**9)
+    shopper = ShopperPipeline(cfg, bus, params=shopper_params)
     clock = clock or Clock(clock_state)
     if not clock.synced:
         log.warning("starting with an unsynced clock; cloud sync will wait")

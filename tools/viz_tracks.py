@@ -1,28 +1,36 @@
-"""Draw tracks over the video. The fastest way to see whether it works.
+"""Run a clip through the shopper pipeline; write a per-video report folder.
 
-    python -m tools.viz_tracks --video clip.mp4 --out out.mp4     # any clip, no config
-    python -m tools.viz_tracks --source sim --out sim.mp4          # the simulator
-    python -m tools.viz_tracks --config config/overhead_01 --video clip.mp4
+    tools/try_video.sh vid/arcade1.mp4 --detector yolo          # the usual way
+    python -m tools.viz_tracks --video clip.mp4 --report out/clip
 
-With --video and no --config it runs **layout-free**: no door line, no zones, no
-floor calibration, because none of those can be inferred from pixels and
-painting the simulator's floor plan over real footage only misleads. What it
-measures instead needs no layout at all:
+The report folder answers the four shopper-analytics questions, one file each,
+and is honest about which ones need a per-camera config:
 
-* dwell -- how long each person was present, and how long they stood still,
-  which is what "browsing near products" looks like to a camera;
-* a heatmap of where feet were, in pixels, painted over the actual video.
+    tracked.mp4        annotated video: boxes, ids, dwell labels
+    heatmap.png        4. movement heatmap -- cumulative, drawn ONCE over a still,
+                          because history painted over live video is misleading
+    dwell.csv          3. per person: seconds present, seconds standing still,
+                          distance walked, which image region they dwelt in
+    footfall.csv       2. per time bucket: people present, arrivals, departures
+                          (by *store zone* needs zones.json -> --config)
+    entries_exits.csv  1. crossings of the configured door (--config), else a
+                          labelled proxy: tracks that appeared from / left via a
+                          frame edge
+    summary.txt/.json  the headline numbers
 
-This is the one file in the shopper work that imports cv2. shopper/ itself must
-stay importable on a board with no display stack.
+Layout-free (no --config) means no door, no zones, no floor calibration: none
+of those can be inferred from pixels. This is the one file in the shopper work
+that imports cv2.
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 import shutil
 import tempfile
+from collections import Counter, defaultdict
 from dataclasses import replace
 from pathlib import Path
 
@@ -41,16 +49,51 @@ from shopper.tripwire import TripwireCounter
 log = logging.getLogger("viz_tracks")
 
 W, H = 640, 480
-HEAT_CELL = 16                      # px; heatmap resolution in layout-free mode
+HEAT_CELL = 16                      # px per heatmap cell
+EDGE_BAND = 24                      # px from the content edge that counts as "the edge"
 PALETTE = [(66, 135, 245), (245, 176, 66), (66, 245, 129), (245, 66, 152),
            (245, 245, 66), (167, 66, 245), (66, 245, 245), (245, 111, 66)]
+REGION_ROWS = ("top", "middle", "bottom")
+REGION_COLS = ("left", "centre", "right")
 
 
 def colour(track_id):
     return PALETTE[track_id % len(PALETTE)]
 
 
-# --- drawing ----------------------------------------------------------------
+# --- geometry helpers (pure; tested) ------------------------------------------
+def content_rect(src_w, src_h):
+    """Where the letterboxed video actually is inside the 640x480 frame."""
+    s = min(W / src_w, H / src_h)
+    rw, rh = int(round(src_w * s)), int(round(src_h * s))
+    x0, y0 = (W - rw) // 2, (H - rh) // 2
+    return x0, y0, x0 + rw, y0 + rh
+
+
+def near_edge(u, v, rect, band=EDGE_BAND):
+    """Is this foot point within `band` px of the visible frame's edge?
+
+    Judged against the *content* rectangle, not the black letterbox bars --
+    a 16:9 clip inside 640x480 has 60 px of bar top and bottom that nobody
+    walks through.
+    """
+    x0, y0, x1, y1 = rect
+    return u <= x0 + band or u >= x1 - band or v <= y0 + band or v >= y1 - band
+
+
+def region_of(u, v, rect):
+    """Which of nine image regions a foot point is in: 'bottom-left' etc."""
+    x0, y0, x1, y1 = rect
+    col = min(2, max(0, int((u - x0) / max((x1 - x0) / 3, 1))))
+    row = min(2, max(0, int((v - y0) / max((y1 - y0) / 3, 1))))
+    return f"{REGION_ROWS[row]}-{REGION_COLS[col]}"
+
+
+def bucket_of(frame, fps, bucket_s):
+    return int(frame // max(int(round(fps * bucket_s)), 1))
+
+
+# --- drawing ------------------------------------------------------------------
 def draw_tracks(canvas, tracks, label_by_track):
     for tr in tracks:
         x, y, w, h = (int(v) for v in tr.box)
@@ -77,7 +120,6 @@ def draw_wires(canvas, wires):
 
 
 def draw_zones(canvas, cfg, stream):
-    """Zone outlines projected back into the image. Nothing without a homography."""
     Hm = cfg.homography.get(stream)
     if Hm is None:
         return
@@ -90,39 +132,29 @@ def draw_zones(canvas, cfg, stream):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 120, 120), 1, cv2.LINE_AA)
 
 
-def draw_heat(canvas, grid):
-    """Blend the foot-point heatmap over the frame. Hot = people stood here."""
+def draw_heat(canvas, grid, strength=0.7):
+    """Blend a heat grid over the frame. Normalised after blur so the peak is red."""
     if grid.max() <= 0:
         return canvas
     big = cv2.resize(grid, (W, H), interpolation=cv2.INTER_LINEAR)
     big = cv2.GaussianBlur(big, (0, 0), HEAT_CELL / 2)
-    # Normalise *after* blurring, or the blur flattens the peak and the hottest
-    # spot renders as a faint tint instead of red.
-    norm = (big / big.max()) ** 0.5             # sqrt so a few hot cells don't hide the rest
+    norm = (big / big.max()) ** 0.5
     heat = (norm * 255).astype(np.uint8)
     colour_map = cv2.applyColorMap(heat, cv2.COLORMAP_JET)
-    alpha = (norm * 0.7)[..., None]
+    alpha = (norm * strength)[..., None]
     return (canvas * (1 - alpha) + colour_map * alpha).astype(np.uint8)
 
 
-# --- layout-free clipset -----------------------------------------------------
+# --- clipsets -----------------------------------------------------------------
 def bare_clipset(video, fps, base="config/sim"):
-    """A clipset with nothing in it that would have to be true of *this* camera.
-
-    Copies the sim config for the parts the loader insists on (store id, shelf
-    ROIs it never uses here), then empties the tripwires and zones and drops the
-    homography. The pipeline treats each of those as "not configured".
-    """
+    """A clipset with nothing in it that would have to be true of *this* camera."""
     d = Path(tempfile.mkdtemp()) / "clipset"
     shutil.copytree(base, d)
     (d / "tripwires.json").write_text("[]")
     (d / "zones.json").write_text("[]")
     for f in d.glob("homography_*.npy"):
         f.unlink()
-    # The sim's tracker.yaml is tuned for the sim -- among other things it turns
-    # the furniture filter off, because rendered rectangles have no furniture
-    # noise. Real footage does. Layout-free means the real-footage defaults.
-    (d / "tracker.yaml").unlink(missing_ok=True)
+    (d / "tracker.yaml").unlink(missing_ok=True)     # sim tuning is for the sim
     _point_at_video(d, video, fps)
     return d
 
@@ -134,44 +166,227 @@ def _point_at_video(clipset, video, fps):
         f"overhead: {{source: file, path: {Path(video).resolve()}, fps: {fps}, loop: false}}"))
 
 
+# --- the report ---------------------------------------------------------------
+class Report:
+    """Everything the four analytics questions need, collected as frames go by."""
+
+    def __init__(self, fps, rect, bucket_s, has_door, has_zones):
+        self.fps, self.rect, self.bucket_s = fps, rect, bucket_s
+        self.has_door, self.has_zones = has_door, has_zones
+        self.people = {}                    # id -> record
+        self.per_frame = []                 # people present, per frame
+        self.heat = np.zeros((H // HEAT_CELL, W // HEAT_CELL), dtype=np.float32)
+        self.crossings = []                 # (frame, dir) from a configured door
+        self.zone_frames = defaultdict(Counter)   # id -> zone -> frames
+        self.last_image = None
+
+    def frame(self, f, tracks, standing_of, zone_of, image):
+        self.per_frame.append(len(tracks))
+        if image is not None:
+            self.last_image = image
+        for tr in tracks:
+            fu, fv = tr.foot
+            rec = self.people.setdefault(tr.id, {
+                "first": f, "born_foot": (fu, fv), "present": 0, "still": 0,
+                "regions": Counter()})
+            rec["last"], rec["last_foot"], rec["walked"] = f, (fu, fv), tr.travelled
+            rec["present"] += 1
+            rec["still"] += int(standing_of(tr))
+            rec["regions"][region_of(fu, fv, self.rect)] += 1
+            gx = int(min(max(fu, 0), W - 1)) // HEAT_CELL
+            gy = int(min(max(fv, 0), H - 1)) // HEAT_CELL
+            self.heat[gy, gx] += 1.0
+            z = zone_of(tr)
+            if z:
+                self.zone_frames[tr.id][z] += 1
+
+    # --- 3. dwell ----------------------------------------------------------
+    def dwell_rows(self):
+        rows = []
+        for tid, r in sorted(self.people.items(), key=lambda kv: -kv[1]["present"]):
+            top_region = r["regions"].most_common(1)[0][0] if r["regions"] else ""
+            zones = self.zone_frames.get(tid)
+            row = {"person": tid,
+                   "first_seen_s": round(r["first"] / self.fps, 2),
+                   "last_seen_s": round(r["last"] / self.fps, 2),
+                   "present_s": round(r["present"] / self.fps, 2),
+                   "standing_still_s": round(r["still"] / self.fps, 2),
+                   "walked_px": round(r["walked"]),
+                   "mostly_in_region": top_region}
+            if self.has_zones:
+                row["mostly_in_zone"] = zones.most_common(1)[0][0] if zones else ""
+            rows.append(row)
+        return rows
+
+    # --- 2. footfall over time -------------------------------------------
+    def footfall_rows(self):
+        n = len(self.per_frame)
+        if n == 0:
+            return []
+        nb = bucket_of(n - 1, self.fps, self.bucket_s) + 1
+        present = [[] for _ in range(nb)]
+        for f, c in enumerate(self.per_frame):
+            present[bucket_of(f, self.fps, self.bucket_s)].append(c)
+        arrivals, departures = Counter(), Counter()
+        for r in self.people.values():
+            arrivals[bucket_of(r["first"], self.fps, self.bucket_s)] += 1
+            if r["last"] < n - 1:                       # still there at the end = not departed
+                departures[bucket_of(r["last"], self.fps, self.bucket_s)] += 1
+        rows = []
+        for b in range(nb):
+            rows.append({"from_s": round(b * self.bucket_s, 1),
+                         "to_s": round(min((b + 1) * self.bucket_s, n / self.fps), 1),
+                         "people_present_mean": round(float(np.mean(present[b])), 2) if present[b] else 0.0,
+                         "people_present_max": int(max(present[b])) if present[b] else 0,
+                         "arrivals": arrivals[b], "departures": departures[b]})
+        return rows
+
+    # --- 1. entries / exits ------------------------------------------------
+    def entries_exits_rows(self):
+        """Door crossings if a door is configured; else a labelled proxy."""
+        n = len(self.per_frame)
+        if self.has_door:
+            per = defaultdict(Counter)
+            for f, d in self.crossings:
+                per[bucket_of(f, self.fps, self.bucket_s)][d] += 1
+            nb = bucket_of(max(n - 1, 0), self.fps, self.bucket_s) + 1
+            return [{"from_s": round(b * self.bucket_s, 1), "entered": per[b]["in"],
+                     "exited": per[b]["out"], "basis": "configured door line"}
+                    for b in range(nb)]
+        rows = []
+        min_frames = int(0.5 * self.fps)
+        for tid, r in sorted(self.people.items()):
+            if r["present"] < min_frames:
+                continue
+            entered = near_edge(*r["born_foot"], self.rect)
+            left = near_edge(*r["last_foot"], self.rect) and r["last"] < n - 1
+            rows.append({"person": tid, "entered_view_from_edge": int(entered),
+                         "left_view_via_edge": int(left),
+                         "basis": "frame edge (no door configured)"})
+        return rows
+
+    # --- summary -----------------------------------------------------------
+    def summary(self, video, detector):
+        n = len(self.per_frame)
+        ee = self.entries_exits_rows()
+        if self.has_door:
+            entered, exited = sum(r["entered"] for r in ee), sum(r["exited"] for r in ee)
+            basis = "configured door line"
+        else:
+            entered = sum(r["entered_view_from_edge"] for r in ee)
+            exited = sum(r["left_view_via_edge"] for r in ee)
+            basis = "frame edge -- proxy; configure a door line for real store entries"
+        dw = self.dwell_rows()
+        long_dwell = [r for r in dw if r["standing_still_s"] >= 2.0]
+        hot = None
+        if self.heat.max() > 0:
+            gy, gx = np.unravel_index(int(np.argmax(self.heat)), self.heat.shape)
+            hot = {"x": int(gx * HEAT_CELL + HEAT_CELL // 2), "y": int(gy * HEAT_CELL + HEAT_CELL // 2),
+                   "region": region_of(gx * HEAT_CELL, gy * HEAT_CELL, self.rect),
+                   "foot_samples": int(self.heat.max())}
+        return {
+            "video": video, "detector": detector, "frames": n,
+            "duration_s": round(n / self.fps, 1),
+            "1_entries_exits": {"entered": entered, "exited": exited, "basis": basis},
+            "2_footfall": {"people_present_mean": round(float(np.mean(self.per_frame)), 2) if n else 0,
+                           "people_present_max": int(max(self.per_frame)) if n else 0,
+                           "distinct_people_tracked": len(self.people),
+                           "by_zone": "needs zones.json (--config)" if not self.has_zones else "see dwell.csv",
+                           "by_time": "see footfall.csv"},
+            "3_dwell": {"people_who_stood_still_2s_or_more": len(long_dwell),
+                        "longest_still_s": max((r["standing_still_s"] for r in dw), default=0.0),
+                        "near": "image regions (see dwell.csv); named displays need zones.json"},
+            "4_heatmap": {"file": "heatmap.png", "hottest": hot},
+        }
+
+
+def write_report(rep, out_dir, video, detector, cfg, stream):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    def csv_out(name, rows):
+        if not rows:
+            (out_dir / name).write_text("")
+            return
+        with open(out_dir / name, "w", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+            w.writeheader()
+            w.writerows(rows)
+
+    csv_out("dwell.csv", rep.dwell_rows())
+    csv_out("footfall.csv", rep.footfall_rows())
+    csv_out("entries_exits.csv", rep.entries_exits_rows())
+
+    # 4. the heatmap, once, over a still -- this is the afterwards artefact.
+    base = rep.last_image.copy() if rep.last_image is not None else np.full((H, W, 3), 18, np.uint8)
+    base = draw_heat(base, rep.heat, strength=0.75)
+    draw_zones(base, cfg, stream)
+    draw_banner(base, f"movement heatmap  {int(rep.heat.sum())} foot-samples over "
+                      f"{len(rep.per_frame) / rep.fps:.0f} s  (red = most time spent)")
+    cv2.imwrite(str(out_dir / "heatmap.png"), base)
+
+    s = rep.summary(video, detector)
+    (out_dir / "summary.json").write_text(json.dumps(s, indent=2))
+    ee, ff, dw, hm = s["1_entries_exits"], s["2_footfall"], s["3_dwell"], s["4_heatmap"]
+    lines = [
+        f"{Path(video).name}  --  {s['duration_s']} s, detector: {detector}",
+        "",
+        f"1. ENTRIES / EXITS   entered {ee['entered']}   exited {ee['exited']}",
+        f"   basis: {ee['basis']}",
+        f"2. FOOTFALL          mean {ff['people_present_mean']} people present, peak {ff['people_present_max']}, "
+        f"{ff['distinct_people_tracked']} distinct people tracked",
+        f"   over time: footfall.csv    by store zone: {ff['by_zone']}",
+        f"3. DWELL             {dw['people_who_stood_still_2s_or_more']} people stood still >= 2 s, "
+        f"longest {dw['longest_still_s']} s",
+        f"   per person: dwell.csv    near what: {dw['near']}",
+        f"4. HEATMAP           heatmap.png" +
+        (f"   hottest: {hm['hottest']['region']} ({hm['hottest']['foot_samples']} samples)" if hm["hottest"] else ""),
+    ]
+    (out_dir / "summary.txt").write_text("\n".join(lines) + "\n")
+    return out_dir
+
+
 # --- main ---------------------------------------------------------------------
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--video", default=None, help="any video file; layout-free unless --config")
     ap.add_argument("--config", default=None, help="clipset with door/zones/calibration")
+    ap.add_argument("--report", default=None, help="report folder (default out/<video name>/)")
+    ap.add_argument("--out", default=None, help="annotated mp4 path (default <report>/tracked.mp4)")
     ap.add_argument("--source", default="sim", choices=["sim", "file", "camera"])
-    ap.add_argument("--backend", default="sim", choices=["sim", "reference", "pl"])
+    ap.add_argument("--backend", default="sim", choices=["sim", "reference", "yolo", "pl"])
+    ap.add_argument("--detector", default="mog2", choices=["mog2", "yolo"],
+                    help="mog2 = background subtraction (the FPGA chain); yolo = person "
+                         "detector (Jetson). yolo sees people who stand still")
+    ap.add_argument("--conf", type=float, default=0.3, help="yolo confidence threshold")
     ap.add_argument("--frames", type=int, default=0, help="0 = whole clip")
     ap.add_argument("--fps", type=float, default=None, help="override the file's fps")
     ap.add_argument("--stream", default="overhead")
-    ap.add_argument("--out", default=None, help="write an mp4 instead of a window")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--bucket-s", type=float, default=10.0, help="footfall time bucket")
     ap.add_argument("--bg-lr", type=float, default=None,
-                    help="MOG2 learning rate; lower keeps still people longer. "
-                         "Default: the 0.005 register default scaled to the clip's "
-                         "fps, because the rate is per frame and 0.005 was tuned "
-                         "at 15 fps -- a 30 fps clip would otherwise absorb people "
-                         "twice as fast")
+                    help="MOG2 learning rate; default 0.005 scaled to the clip's fps")
     ap.add_argument("--morph", type=int, default=1, help="opening passes; 2 kills noise")
     ap.add_argument("--high-area", type=int, default=None,
                     help="confident-blob area; lower when people are small in frame")
-    ap.add_argument("--no-heat", action="store_true", help="don't paint the heatmap")
-    ap.add_argument("--detector", default="mog2", choices=["mog2", "yolo"],
-                    help="mog2 = background subtraction (the FPGA chain); yolo = "
-                         "person detector (Jetson). yolo sees people who stand still")
-    ap.add_argument("--conf", type=float, default=0.3, help="yolo confidence threshold")
+    ap.add_argument("--heat", action="store_true",
+                    help="also paint a *decaying* live glow in the video (off by default; "
+                         "the cumulative heatmap goes in heatmap.png)")
+    ap.add_argument("--no-open", action="store_true")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     from main import build_backend, build_source
 
-    layout_free = False
+    layout_free, src_w, src_h = False, W, H
     if a.video:
+        cap = cv2.VideoCapture(a.video)
         if a.fps is None:
-            cap = cv2.VideoCapture(a.video)
             a.fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-            cap.release()
+        src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or W
+        src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or H
+        cap.release()
         if a.config:
             config = Path(tempfile.mkdtemp()) / "clipset"
             shutil.copytree(a.config, config)
@@ -180,18 +395,22 @@ def main(argv=None):
             config = bare_clipset(a.video, a.fps)
             layout_free = True
         a.source, a.backend = "file", "reference"
+        if a.report is None:
+            a.report = Path("out") / Path(a.video).stem
         log.info("testing %s at %.0f fps%s", a.video, a.fps,
                  "  (layout-free: no door, no zones, no calibration)" if layout_free else "")
     else:
         config = a.config or "config/sim"
+        if a.report is None:
+            a.report = Path("out") / "sim"
+    if a.out is None:
+        a.out = str(Path(a.report) / "tracked.mp4")
+    Path(a.report).mkdir(parents=True, exist_ok=True)
 
     cfg = load_clipset(config)
     src = build_source(a.source, cfg, a.stream, seed=a.seed)
     if a.bg_lr is None:
         a.bg_lr = 0.005 * 15.0 / max(float(src.fps), 1.0)
-        if a.video:
-            log.info("background rate %.4f (0.005 at 15 fps, scaled to %.0f fps)",
-                     a.bg_lr, src.fps)
     be = build_backend(a.backend, cfg)
     if a.backend == "reference":
         from pl.reference import ReferenceBackend
@@ -200,23 +419,39 @@ def main(argv=None):
             from pl.yolo import YoloBackend
             be = YoloBackend(cfg, conf=a.conf, reference=be)
             log.info("detector: yolo (conf %.2f) -- no warm-up, whole-body boxes", a.conf)
+        else:
+            log.info("detector: mog2, background rate %.4f", a.bg_lr)
 
     p = TrackerParams.load(config)
     if a.high_area:
         p = replace(p, high_area=a.high_area)
+    if a.detector == "yolo":
+        # The furniture filter retires anything that never walked. It exists for
+        # background-subtraction noise -- a trolley wheel the model keeps flagging.
+        # A detector never emits shelf blobs, so under YOLO the only thing it can
+        # retire is a real shopper who arrived before the clip started and stood
+        # still: vid1's one man was tracked for 25 frames of 240, then "furniture".
+        p = replace(p, furniture_age=10**9)
     tracker = Tracker(p)
     wires = TripwireCounter(cfg.tripwires, p, stream=a.stream)
     zmap = ZoneMap(cfg.zones) if cfg.zones else None
     Hm = cfg.homography.get(a.stream)
     fps = float(src.fps)
+    rect = content_rect(src_w, src_h) if a.video else (0, 0, W, H)
+    rep = Report(fps, rect, a.bucket_s, has_door=bool(wires.wires),
+                 has_zones=zmap is not None and Hm is not None)
 
-    heat = np.zeros((H // HEAT_CELL, W // HEAT_CELL), dtype=np.float32)
-    present = {}                 # track id -> frames seen
-    still = {}                   # track id -> frames standing still
-    moved = {}                   # track id -> furthest px from where it appeared
-    counted = []
-    writer = cv2.VideoWriter(a.out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H)) if a.out else None
+    def standing(tr):
+        return tr.held > 0 or tr.seen_speed < p.static_speed_px
 
+    def zone_of(tr):
+        if zmap is None or Hm is None:
+            return None
+        return zmap.zone_of(*image_to_floor(Hm, tr.foot))
+
+    live = np.zeros_like(rep.heat)
+    decay = p.heatmap_decay_per_s ** (1.0 / fps)
+    writer = cv2.VideoWriter(a.out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H))
     shown = 0
     try:
         for frame in src.frames():
@@ -224,37 +459,36 @@ def main(argv=None):
                 break
             if be is not None and frame.image is not None:
                 frame.result = be.process(frame.image, 0, frame.frame_id)
-
             canvas = (frame.image.copy() if frame.image is not None
                       else np.full((H, W, 3), 18, np.uint8))
             warm = bool(int(frame.result["flags"]) & FLAG_BG_WARM)
             t = shown / fps
             tracks = tracker.update(prefilter(frame.blobs, p), t) if warm else []
-            wires.update(tracks, t)
+            for wire_id, direction, _ in wires.update(tracks, t):
+                rep.crossings.append((shown, direction))
             for tr in tracker.just_deleted:
                 wires.forget(tr.id)
 
+            rep.frame(shown, tracks, standing, zone_of, frame.image)
+
             labels = {}
             for tr in tracks:
-                present[tr.id] = present.get(tr.id, 0) + 1
-                moved[tr.id] = tr.travelled
-                standing = tr.held > 0 or tr.seen_speed < p.static_speed_px
-                if standing:
-                    still[tr.id] = still.get(tr.id, 0) + 1
-                fu, fv = tr.foot
-                gx, gy = int(min(max(fu, 0), W - 1)) // HEAT_CELL, int(min(max(fv, 0), H - 1)) // HEAT_CELL
-                heat[gy, gx] += 1.0
-                label = f"#{tr.id} {present[tr.id] / fps:.1f}s"
-                if still.get(tr.id, 0) > fps:                     # over a second still
-                    label += f" still {still[tr.id] / fps:.0f}s"
-                if zmap is not None and Hm is not None:
-                    zone = zmap.zone_of(*image_to_floor(Hm, tr.foot))
-                    if zone:
-                        label += f" {zone}"
+                r = rep.people[tr.id]
+                label = f"#{tr.id} {r['present'] / fps:.1f}s"
+                if r["still"] > fps:
+                    label += f" still {r['still'] / fps:.0f}s"
+                z = zone_of(tr)
+                if z:
+                    label += f" {z}"
                 labels[tr.id] = label
 
-            if not a.no_heat:
-                canvas = draw_heat(canvas, heat)
+            if a.heat:
+                live *= decay
+                for tr in tracks:
+                    fu, fv = tr.foot
+                    live[int(min(max(fv, 0), H - 1)) // HEAT_CELL,
+                         int(min(max(fu, 0), W - 1)) // HEAT_CELL] += 1.0
+                canvas = draw_heat(canvas, live, strength=0.5)
             draw_zones(canvas, cfg, a.stream)
             draw_wires(canvas, wires.wires)
             draw_tracks(canvas, tracks, labels)
@@ -264,45 +498,16 @@ def main(argv=None):
             if not warm:
                 banner += "   [background warming up]"
             draw_banner(canvas, banner)
-
-            if writer is not None:
-                writer.write(canvas)
-            else:
-                cv2.imshow("tracks", canvas)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
-            counted.append(len(tracks))
+            writer.write(canvas)
             shown += 1
     finally:
         src.close()
-        if writer is not None:
-            writer.release()
-        else:
-            cv2.destroyAllWindows()
+        writer.release()
 
-    # --- report -----------------------------------------------------------
-    warm_counts = (counted[100:] or counted) if a.detector == "mog2" else counted
-    if a.out:
-        log.info("wrote %s (%d frames)", a.out, shown)
-    log.info("people tracked: mean %.2f, max %d, seen in %d/%d frames",
-             sum(warm_counts) / max(len(warm_counts), 1), max(warm_counts or [0]),
-             sum(1 for c in warm_counts if c), len(warm_counts))
-    if present:
-        log.info("dwell per person (id: seconds present, seconds standing still, "
-                 "how far they walked to get there):")
-        for tid in sorted(present, key=present.get, reverse=True)[:12]:
-            log.info("  #%-3d %5.1f s present   %5.1f s still   walked %3.0f px",
-                     tid, present[tid] / fps, still.get(tid, 0) / fps, moved.get(tid, 0))
-    if heat.max() > 0:
-        hot = np.unravel_index(int(np.argmax(heat)), heat.shape)
-        log.info("hottest spot: around pixel (%d, %d), %d foot-samples",
-                 hot[1] * HEAT_CELL + HEAT_CELL // 2, hot[0] * HEAT_CELL + HEAT_CELL // 2,
-                 int(heat.max()))
-    if a.out:
-        summary = {"video": a.video, "frames": shown, "layout_free": layout_free,
-                   "dwell_s": {str(k): round(v / fps, 2) for k, v in present.items()},
-                   "still_s": {str(k): round(v / fps, 2) for k, v in still.items()}}
-        Path(a.out).with_suffix(".json").write_text(json.dumps(summary, indent=2))
+    out_dir = write_report(rep, a.report, a.video or "sim", a.detector, cfg, a.stream)
+    log.info("wrote %s (%d frames)", a.out, shown)
+    log.info("report in %s/", out_dir)
+    log.info("%s", (out_dir / "summary.txt").read_text())
     return 0
 
 
