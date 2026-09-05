@@ -8,6 +8,8 @@ from shelf.fill import FacingReading, ShelfFillMonitor, ShelfStatus
 from shelf.stockout import StockoutTracker
 from shelf.planogram import PlanogramAuditor
 from shelf.detector import ShelfEdgeDetector
+from shelf.inventory_tracker import InventoryTracker
+from shelf.pick_detector import ShelfPickDetector
 
 log = logging.getLogger("shelf.pipeline")
 
@@ -25,6 +27,8 @@ class ShelfPipeline:
         self.fill_monitor = ShelfFillMonitor(rois=rois)
         self.stockout_tracker = StockoutTracker(planogram=planogram, store_id=store_id)
         self.planogram_auditor = PlanogramAuditor(planogram=planogram, store_id=store_id)
+        self.inventory_tracker = InventoryTracker(planogram=planogram, store_id=store_id)
+        self.pick_detector = ShelfPickDetector(rois=rois)
         self.detector = ShelfEdgeDetector(model_type="fast_cv") if use_detector else None
         self._roi_index = {r["id"]: i for i, r in enumerate(rois)}
         self._rois_raw = rois
@@ -54,6 +58,17 @@ class ShelfPipeline:
         # Stockout & replenishment alerts
         so_events = self.stockout_tracker.update(t, readings)
 
+        # Inventory item-count / removal tracking based on fill changes
+        inv_events = []
+        for facing, reading in readings.items():
+            evs = self.inventory_tracker.update_from_fractional_fill(t=t, facing=facing, fill_val=reading.smoothed_fill)
+            inv_events.extend(evs)
+
+        # Customer hand reaching / pick interactions
+        if image is not None:
+            picks = self.pick_detector.detect_interactions(image, t)
+            # Log pick interaction if needed
+
         # Planogram compliance audit
         det_skus = None
         if self.detector is not None and image is not None:
@@ -63,10 +78,20 @@ class ShelfPipeline:
 
         # Publish events to bus
         if self.bus is not None:
-            for ev in so_events + pl_events:
+            for ev in so_events + inv_events + pl_events:
                 self.bus.publish(ev)
 
         return readings
+
+    def register_manual_removal(self, t: float, facing: str, quantity: int = 1) -> List[Event]:
+        events = self.inventory_tracker.register_removal(t=t, facing=facing, quantity=quantity)
+        if self.bus is not None:
+            for ev in events:
+                self.bus.publish(ev)
+        return events
+
+    def get_inventory_summary(self) -> Dict[str, dict]:
+        return self.inventory_tracker.get_summary()
 
     def get_compliance_score(self, readings: Dict[str, FacingReading]) -> float:
         return self.planogram_auditor.get_compliance_score(readings)
