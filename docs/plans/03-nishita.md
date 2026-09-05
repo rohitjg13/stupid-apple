@@ -1,0 +1,117 @@
+# Plan 3 — Nishita: Shopper analytics (tracking, counting, dwell, heatmap)
+
+Read `docs/SHARED.md` first. This module consumes `FrameResult.blobs` (from sim,
+reference or PL — it never knows which) and Rohit's geometry, and publishes the
+shopper events on the bus: `tripwire`, `occupancy`, `visit`, `heatmap`. Footfall
+and the heatmap are the first things judges look at.
+
+**No detector, no MobileNet-SSD, no ReID, no appearance embeddings.** A 650 MHz
+A9 manages 1–2 fps on a detector, and appearance features break the privacy claim
+in `docs/DPDP.md`. MOG2 blobs from the fabric plus IoU tracking is the design.
+
+## Ownership
+
+| Area | Files |
+|---|---|
+| Tracking | `shopper/tracker.py`, `shopper/kalman.py` |
+| Pre-filter | `shopper/blob_prefilter.py` |
+| Counting | `shopper/tripwire.py` |
+| Visits | `shopper/visits.py` |
+| Heatmap | `shopper/heatmap.py` |
+| Glue | `shopper/pipeline.py` |
+| Tuning | `shopper/params.py`, `config/<clipset>/tracker.yaml` |
+| Eval | `shopper/metrics.py` (called by `tools/evaluate.py`), `tools/viz_tracks.py` |
+
+## Interfaces
+
+- **In**: `frame.blobs` (already sliced to `num_blobs`), full-res 640×480 px,
+  sorted by area descending, no confidence score. `flags & FLAG_BG_WARM == 0`
+  means do not count and do not confirm.
+- **Geometry**: `image_to_floor(H, uv)`, `ZoneMap.zone_of(X, Y)`,
+  `ZoneMap.heatmap_index(X, Y)`. Foot point is `(x + w/2, y + h)`.
+- **Out**: Events per `SHARED.md` §5. Track ids are ints from 0 per process and
+  appear only inside a `visit` payload.
+- **Entry point**: `ShopperPipeline(cfg, bus).on_frame(frame, t)`, where `t` is
+  the epoch time `main.py` already derived from `t_ns`. Never recomputed here.
+
+## Things that are not obvious from the spec
+
+1. **`blob["area"]` is full-resolution.** `pl/reference.py` writes
+   `area * SCALE²` with `SCALE = 2`, so the `MIN_BLOB_AREA = 150` register
+   default arrives here as **600**, and the ByteTrack high-score threshold is
+   **1200**. Off by 4× puts every blob in the low-score pass.
+2. **Area is the pseudo-score.** `FrameResult` has no confidence field, so
+   "low score" and "small box" are the same thing. That geometrically couples
+   score to IoU: a small blob can never overlap a large one much, so the second
+   association pass only rescues people whose blob sits near the threshold. A
+   third pass (leftover tracks against leftover big blobs at the loose threshold)
+   matters more than the second — without it a track at 0.49 IoU goes lost while
+   its blob spawns a duplicate identity.
+3. **Sim and reference disagree before warm-up.** `sources/sim.py` emits blobs
+   throughout warm-up; `pl/reference.py` zeroes the mask and emits none. Gating on
+   `FLAG_BG_WARM` is what makes the three backends produce identical events.
+4. **Occupancy publishes at 1 Hz unconditionally**, reporting 0 while cold. It is
+   a heartbeat, not a detection; `tests/test_main.py` counts these events, and
+   only ~50 of 150 frames in that test are warm.
+5. **Merged blobs must not be measured.** When two shoppers touch, the background
+   subtractor emits their *union*. Feeding that to whichever track wins the
+   assignment wrecks its size and scale velocity so it matches neither person on
+   separation. Both claimants coast on their own motion model instead.
+6. **A claimant must be strict.** Claiming at the loose IoU meant two people
+   merely walking near each other were treated as merged, starving real tracks of
+   measurements: 9.6× id churn and 15.6 tracked people where there were 12.6.
+   A claimant is now a confirmed track whose *own best* match is that blob, at
+   the confident threshold.
+7. **Foot points are buffered from track birth**, not from confirmation, and
+   replayed once when the track confirms. People cross a tripwire at the frame
+   edge within a frame or two of appearing, long before a 3-hit confirmation.
+
+## Measured on `config/sim`
+
+Over 1000 s of stream time against the sim's own ground truth:
+
+| Metric | Result | Target |
+|---|---|---|
+| Exit count error | **+2 %** | ±10 % |
+| Entry count error | **−20 %** | ±10 % |
+| Mean tracked vs actual shoppers | **12.64 vs 12.56** | — |
+| Id churn (tracks per walker) | **1.8×** | — |
+| Blob merging (raw → prefiltered) | 12.56 → **12.14** | ≈ no loss |
+
+The entry gap is characterised, not mysterious: 9 % of sim walkers spawn within
+one body width of a neighbour and share a blob, and 6 % head for a first target
+below the door line. Two people entering shoulder to shoulder are one blob to any
+appearance-free tracker, and the fix is a camera angle, not an algorithm.
+
+**These are sim numbers.** The plan's accuracy targets are against annotated
+footage, which does not exist yet. The prefilter in particular cannot be
+validated until real clips land: sim blobs are clean rectangles with no
+fragmentation, shadows or noise, which is exactly what the prefilter exists for.
+
+## Bugs found in shared files (all fixed, all flagged to Rohit)
+
+- `config/sim/tripwires.json` had `in_dir: "down"`. The homography is
+  `Y = 6 − v/80`, so walking *into* the store is `v` *decreasing*. Every entry was
+  reported as an exit.
+- `sources/sim.py` could not demonstrate entry counting at all. Walkers stepped
+  once before their first blob was rendered, so a spawn at `Y=0.2` (v=464) was
+  already past the door line at v=460 by the time it was visible. They then left
+  through the wall from the checkout, missing the door's u-span of 40–240
+  entirely, and loitered on the exit once routed through it.
+
+## Still to do
+
+- Re-tune the prefilter and tracker on real footage when the clipsets land; the
+  merge rule is currently tuned to be conservative because fusing two shoppers
+  loses one permanently while splitting one is recoverable.
+- Profile on the board against the ≤ 8 ms/frame budget (needs hardware).
+- `evaluate.py` against hand-annotated ground truth once `footage/groundtruth/`
+  exists. `shopper/metrics.py` already accepts both circulating GT schemas.
+
+## Note for whoever writes the annotation tool
+
+Two ground-truth schemas are in circulation: `tools/evaluate.py` and its tests
+use `entries: [{t, dir}]` with `occupancy` as `[t, count]` pairs, while plan 06
+specifies separate `entries`/`exits` and `{t, count}` dicts plus `people[].zones`.
+`shopper/metrics.py` normalises both, so neither side is blocked, but it is worth
+pinning one before anyone spends two hours per clip annotating.
