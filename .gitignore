@@ -14,6 +14,8 @@ vid/out/
 scratch/
 *.pt
 ref_vid/
+out/
+vid/
 
 # Frontend / Node
 logs
