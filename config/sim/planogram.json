@@ -1,0 +1,8 @@
+[
+  {"facing": "A1", "sku": "MAGGI-70G",    "name": "Maggi Noodles 70g",   "unit_price": 14,  "expected_sales_per_hour": 6},
+  {"facing": "A2", "sku": "PARLEG-100G",  "name": "Parle-G 100g",        "unit_price": 10,  "expected_sales_per_hour": 8},
+  {"facing": "A3", "sku": "LAYS-52G",     "name": "Lays Classic 52g",    "unit_price": 20,  "expected_sales_per_hour": 5},
+  {"facing": "B1", "sku": "AMUL-500ML",   "name": "Amul Milk 500ml",     "unit_price": 27,  "expected_sales_per_hour": 12},
+  {"facing": "B2", "sku": "TATASALT-1KG", "name": "Tata Salt 1kg",       "unit_price": 28,  "expected_sales_per_hour": 3},
+  {"facing": "B3", "sku": "COLGATE-100G", "name": "Colgate Strong 100g", "unit_price": 55,  "expected_sales_per_hour": 2}
+]
