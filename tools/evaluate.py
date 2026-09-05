@@ -79,6 +79,38 @@ def evaluate(events, gt, stockout_tolerance_s=10.0) -> dict:
     return m
 
 
+def evaluate_queue(events, truth, tolerance_s=2.0) -> dict:
+    """Queue half of the W5 accuracy numbers.
+
+    events: queue_estimate events
+    truth:  list of {t, lane, count, actual_wait_s} from the queue-clip ground truth
+    Matches each truth sample to the nearest prediction within `tolerance_s`.
+    """
+    preds = [(e.t, e.payload["lane"], e.payload["count"], e.payload["pred_wait_s"])
+             for e in events if e.event_type == "queue_estimate"]
+    if not preds or not truth:
+        return {"count_mae": None, "wait_mae": None, "n": 0}
+
+    count_errs, wait_errs, n = [], [], 0
+    for row in truth:
+        candidates = [(abs(p[0] - row["t"]), p) for p in preds
+                      if p[1] == row["lane"] and abs(p[0] - row["t"]) <= tolerance_s]
+        if not candidates:
+            continue
+        _, p = min(candidates, key=lambda x: x[0])
+        count_errs.append(abs(p[2] - row["count"]))
+        wait_errs.append(abs(p[3] - row["actual_wait_s"]))
+        n += 1
+
+    m = {
+        "count_mae": float(np.mean(count_errs)) if count_errs else None,
+        "wait_mae": float(np.mean(wait_errs)) if wait_errs else None,
+        "n": n,
+    }
+    m["count_pass"] = m["count_mae"] is not None and m["count_mae"] <= 1.0
+    return m
+
+
 def main(argv=None):
     from core.events import Event
 
