@@ -72,6 +72,27 @@ in `docs/DPDP.md`. MOG2 blobs from the fabric plus IoU tracking is the design.
    The other half of the fix is `MOG2_LR`, which is Rohit's and Khushwant's
    register: at the 0.005 default, people were visible in 136 of 368 frames of
    real supermarket footage; at 0.0005, 363 of 368.
+
+   Holding still people has a mirror-image failure that real footage exposed
+   immediately: a trolley wheel or a glossy basket that the background model
+   keeps flagging gets a real match every frame, so it looks like a perfectly
+   tracked shopper with zero speed and was reported as a 15 s dwell. What a
+   shopper always has and furniture never does is that **they walked here**.
+   A track is only held, and only counts, if it has been measured a body width
+   from where it appeared for several *sustained* frames -- cumulative distance
+   accumulates jitter into a fake journey, and peak distance is spoofed by one
+   frame where the basket's blob merged with a passer-by. Anything confirmed for
+   ~2 s without that is retired as furniture, and its position is remembered so
+   the same blob does not respawn a fresh track every 26 frames.
+
+   The filter is **off for the sim** (`config/sim/tracker.yaml`) and on by
+   default for real footage. The sim renders clean rectangles with no furniture
+   noise, so there it can only misfire -- and it did: 32 real walkers retired
+   over 1000 s and entries −20 % → −24 %. Those were not churn-reborn tracks but
+   **orphans**: a dwelling walker whose track was stolen by a passer-by, leaving
+   them to spawn a fresh never-moved track. Track stealing is the root cause and
+   is the same mechanism behind the 1.8× id churn; it is the next thing to fix
+   in the tracker, not something the furniture filter should be papering over.
 8. **Foot points are buffered from track birth**, not from confirmation, and
    replayed once when the track confirms. People cross a tripwire at the frame
    edge within a frame or two of appearing, long before a 3-hit confirmation.

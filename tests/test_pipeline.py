@@ -138,7 +138,7 @@ def test_the_heatmap_is_published_on_its_own_period():
 
 # --- lifecycle ------------------------------------------------------------
 def test_close_flushes_open_visits():
-    pipe, bus = run([[(400, 100, 40, 136)] for _ in range(120)])
+    pipe, bus = run(walk_through_store(120))      # walks in, then stands in aisle_a
     before = len(bus.of("visit"))
     pipe.close(T0 + 8.0)
     assert len(bus.of("visit")) > before, "an open visit was lost at shutdown"
@@ -165,3 +165,11 @@ def test_a_frame_from_another_stream_is_ignored():
 def test_sixty_four_blobs_do_not_crash_the_pipeline():
     _, bus = run(sc.too_many_blobs(n=40, count=70))
     assert bus.of("occupancy")
+
+
+def test_a_never_moving_blob_produces_no_visit():
+    """A glossy basket the background model keeps flagging is not a shopper and
+    must not show up as a 4-second dwell in aisle_b."""
+    static = [[(400, 100, 40, 136)] for _ in range(90)]
+    _, bus = run(static)
+    assert bus.of("visit") == [], [v.payload for v in bus.of("visit")]

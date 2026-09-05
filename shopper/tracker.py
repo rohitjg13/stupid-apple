@@ -58,7 +58,8 @@ class Track:
 
     __slots__ = ("id", "kf", "state", "hits", "age", "time_since_update",
                  "shared_frames", "held", "trail", "recent", "seen_speed",
-                 "box", "born_t", "last_t")
+                 "travelled", "far_frames", "born_xy", "furniture", "box", "seen_box",
+                 "born_t", "last_t")
 
     def __init__(self, track_id, bbox, t, params):
         self.id = track_id
@@ -73,7 +74,20 @@ class Track:
         # box only coasts, so its apparent speed is the motion model talking to
         # itself; the honest question is whether they were moving when last seen.
         self.seen_speed = float("inf")
+        # Furthest this track has ever been *measured* from where it was born.
+        # Not a cumulative sum: a basket jittering a pixel a frame for fifteen
+        # seconds sums to hundreds of pixels of "travel" and gets held as a
+        # shopper, while a real walker's smoothed box lags and under-counts.
+        # Peak excursion on raw measurements is immune to both.
+        self.born_xy = (float(bbox[0]), float(bbox[1]))
+        self.travelled = 0.0        # peak excursion, for reporting
+        self.far_frames = 0         # frames measured a body width or more from birth
+        self.furniture = False      # retired as a static object, not a person
         self.box = tuple(float(v) for v in bbox)
+        # Where they were last *measured*. After max_age frames of coasting the
+        # predicted box is 180 px down the aisle from where the person actually
+        # stood, and a grave recorded there never lines up with their next track.
+        self.seen_box = self.box
         self.born_t = float(t)
         self.last_t = float(t)
         # Foot points from *birth*, not from confirmation. On config/sim a walker
@@ -100,6 +114,10 @@ class Track:
         x, y, w, h = self.box
         return (x + w / 2.0, y + h)
 
+    def has_walked(self, params) -> bool:
+        """Sustained movement away from where it appeared: the mark of a person."""
+        return self.far_frames >= params.static_min_far_frames
+
     @property
     def speed(self) -> float:
         """Average px/frame actually travelled recently, not the KF estimate."""
@@ -123,7 +141,13 @@ class Track:
         self.recent.append((self.box[0], self.box[1]))
 
     def update(self, bbox, t, params):
+        bx, by = float(bbox[0]), float(bbox[1])
+        excursion = ((bx - self.born_xy[0]) ** 2 + (by - self.born_xy[1]) ** 2) ** 0.5
+        self.travelled = max(self.travelled, excursion)
+        if excursion >= params.static_min_travel_px:
+            self.far_frames += 1
         self.box = self.kf.update(bbox)
+        self.seen_box = self.box
         self.last_t = float(t)
         self.time_since_update = 0
         self.shared_frames = 0
@@ -156,7 +180,8 @@ class Track:
         # out requires walking. The background model simply learned them as
         # furniture. Keep them, and keep counting their dwell.
         if (self.state in (CONFIRMED, LOST) and self.held < params.static_max_age
-                and self.seen_speed < params.static_speed_px):
+                and self.seen_speed < params.static_speed_px
+                and self.has_walked(params)):
             # LOST is included deliberately. Judging this on one frame makes it a
             # one-way door: a browser whose measured speed blips over the line for
             # a single frame could never be held again, and died 2 s later.
@@ -190,6 +215,9 @@ class Tracker:
         self.tracks: list[Track] = []
         self.just_deleted: list[Track] = []
         self._next_id = 0
+        self._frame = 0
+        self._furniture = []        # [(box, expires_at_frame)] -- do not spawn here
+        self._graves = []           # [(box, expires_at_frame, far_frames)] of the dead
 
     # --- helpers ----------------------------------------------------------
     @staticmethod
@@ -208,6 +236,12 @@ class Tracker:
     def _spawn(self, bbox, t):
         tr = Track(self._next_id, bbox, t, self.p)
         self._next_id += 1
+        # Born where a confirmed track just died? Same person, recycled id. They
+        # inherit having walked, so standing still now does not make them furniture.
+        if self._graves:
+            overlap = iou_matrix([g[0] for g in self._graves], [bbox])[:, 0]
+            for gi in np.flatnonzero(overlap >= 0.3):
+                tr.far_frames = max(tr.far_frames, self._graves[gi][2])
         self.tracks.append(tr)
         return tr
 
@@ -216,6 +250,9 @@ class Tracker:
         """One frame. Returns the currently active (confirmed, seen) tracks."""
         p = self.p
         self.just_deleted = []
+        self._frame += 1
+        self._furniture = [(b, e) for b, e in self._furniture if e > self._frame]
+        self._graves = [g for g in self._graves if g[1] > self._frame]
         boxes, areas = self._boxes(blobs)
 
         for tr in self.tracks:
@@ -304,14 +341,41 @@ class Tracker:
             tr.mark_missed(t, p)
 
         high_set = set(high.tolist())
+        if self._furniture and len(boxes):
+            # A blob sitting on remembered furniture is the same basket being
+            # flagged again, not a new arrival. Refresh the memory while it is.
+            fboxes = [b for b, _ in self._furniture]
+            on_furniture = iou_matrix(fboxes, boxes)
+            for fi in range(len(fboxes)):
+                if on_furniture[fi].max() >= 0.5:
+                    self._furniture[fi] = (fboxes[fi], self._frame + p.furniture_memory)
+            blocked = set(np.flatnonzero(on_furniture.max(axis=0) >= 0.5).tolist())
+        else:
+            blocked = set()
         for dj in range(len(boxes)):
-            if dj not in matched_dets and dj in high_set:
+            if dj not in matched_dets and dj in high_set and dj not in blocked:
                 self._spawn(boxes[dj], t)
+
+        # Furniture filter. Something confirmed for a couple of seconds that has
+        # never moved a body width from where it appeared is not a shopper who is
+        # standing still -- it is a trolley wheel or a glossy basket that the
+        # background model keeps flagging. The hold logic never sees these: they
+        # get a real match every frame, so they look like a perfectly tracked
+        # person with zero speed. A shopper got wherever they are by walking.
+        for tr in self.tracks:
+            if (tr.state in (CONFIRMED, LOST) and tr.age > p.furniture_age
+                    and not tr.has_walked(p)):
+                tr.furniture = True
+                tr.state = DELETED
+                self._furniture.append((tr.box, self._frame + p.furniture_memory))
 
         alive = []
         for tr in self.tracks:
             if tr.state == DELETED:
                 self.just_deleted.append(tr)
+                if not tr.furniture and tr.hits >= p.n_init:
+                    self._graves.append((tr.seen_box, self._frame + p.relink_memory,
+                                         tr.far_frames))
             else:
                 alive.append(tr)
         self.tracks = alive

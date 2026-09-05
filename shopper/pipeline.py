@@ -113,7 +113,7 @@ class ShopperPipeline:
 
         for tr in self.tracker.just_deleted:
             visit = self.visits.close_track(tr.id, t)
-            if visit is not None:
+            if visit is not None and not tr.furniture:   # furniture does not visit
                 self._emit_visit(visit)
             self.tripwires.forget(tr.id)
 

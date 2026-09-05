@@ -12,3 +12,11 @@ merge_x_tol: 0.95
 # 69 tracks fired more than once. Must stay under 20: on the exit side the blob
 # clips at the frame edge, so a 30 px band is unreachable and loses 96% of exits.
 tripwire_deadband_px: 12.0
+
+# The furniture filter is OFF for the sim. It exists for trolley wheels and glossy
+# baskets that a real background model keeps flagging; the sim renders clean
+# rectangles and has no such noise, so here it can only misfire. Measured over
+# 1000 s: with it on, 32 real walkers were retired as furniture and entries fell
+# from -20% to -24%, because a retired orphan's spot blocks new spawns for 40 s
+# right where arrivals appear. Real-footage clipsets keep the default.
+furniture_age: 1000000

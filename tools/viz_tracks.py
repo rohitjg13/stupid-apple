@@ -94,12 +94,14 @@ def draw_heat(canvas, grid):
     """Blend the foot-point heatmap over the frame. Hot = people stood here."""
     if grid.max() <= 0:
         return canvas
-    norm = (grid / grid.max()) ** 0.5           # sqrt so a few hot cells don't hide the rest
-    small = (norm * 255).astype(np.uint8)
-    heat = cv2.resize(small, (W, H), interpolation=cv2.INTER_LINEAR)
-    heat = cv2.GaussianBlur(heat, (0, 0), HEAT_CELL / 2)
+    big = cv2.resize(grid, (W, H), interpolation=cv2.INTER_LINEAR)
+    big = cv2.GaussianBlur(big, (0, 0), HEAT_CELL / 2)
+    # Normalise *after* blurring, or the blur flattens the peak and the hottest
+    # spot renders as a faint tint instead of red.
+    norm = (big / big.max()) ** 0.5             # sqrt so a few hot cells don't hide the rest
+    heat = (norm * 255).astype(np.uint8)
     colour_map = cv2.applyColorMap(heat, cv2.COLORMAP_JET)
-    alpha = (heat.astype(np.float32) / 255.0 * 0.6)[..., None]
+    alpha = (norm * 0.7)[..., None]
     return (canvas * (1 - alpha) + colour_map * alpha).astype(np.uint8)
 
 
@@ -117,6 +119,10 @@ def bare_clipset(video, fps, base="config/sim"):
     (d / "zones.json").write_text("[]")
     for f in d.glob("homography_*.npy"):
         f.unlink()
+    # The sim's tracker.yaml is tuned for the sim -- among other things it turns
+    # the furniture filter off, because rendered rectangles have no furniture
+    # noise. Real footage does. Layout-free means the real-footage defaults.
+    (d / "tracker.yaml").unlink(missing_ok=True)
     _point_at_video(d, video, fps)
     return d
 
@@ -190,6 +196,7 @@ def main(argv=None):
     heat = np.zeros((H // HEAT_CELL, W // HEAT_CELL), dtype=np.float32)
     present = {}                 # track id -> frames seen
     still = {}                   # track id -> frames standing still
+    moved = {}                   # track id -> furthest px from where it appeared
     counted = []
     writer = cv2.VideoWriter(a.out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H)) if a.out else None
 
@@ -213,6 +220,7 @@ def main(argv=None):
             labels = {}
             for tr in tracks:
                 present[tr.id] = present.get(tr.id, 0) + 1
+                moved[tr.id] = tr.travelled
                 standing = tr.held > 0 or tr.seen_speed < p.static_speed_px
                 if standing:
                     still[tr.id] = still.get(tr.id, 0) + 1
@@ -263,10 +271,11 @@ def main(argv=None):
              sum(warm_counts) / max(len(warm_counts), 1), max(warm_counts or [0]),
              sum(1 for c in warm_counts if c), len(warm_counts))
     if present:
-        log.info("dwell per person (id: seconds present, seconds standing still):")
+        log.info("dwell per person (id: seconds present, seconds standing still, "
+                 "how far they walked to get there):")
         for tid in sorted(present, key=present.get, reverse=True)[:12]:
-            log.info("  #%-3d %5.1f s present   %5.1f s still",
-                     tid, present[tid] / fps, still.get(tid, 0) / fps)
+            log.info("  #%-3d %5.1f s present   %5.1f s still   walked %3.0f px",
+                     tid, present[tid] / fps, still.get(tid, 0) / fps, moved.get(tid, 0))
     if heat.max() > 0:
         hot = np.unravel_index(int(np.argmax(heat)), heat.shape)
         log.info("hottest spot: around pixel (%d, %d), %d foot-samples",

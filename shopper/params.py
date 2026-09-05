@@ -59,6 +59,29 @@ class TrackerParams:
     # because leaving requires moving. Hold it, and keep counting it.
     static_speed_px: float = 1.5        # px/frame; a walking person is ~6
     static_max_age: int = 450           # 30 s at 15 fps before we admit defeat
+    # Arriving requires moving too. A shopper standing at a shelf walked there; a
+    # blob that materialised in place and never moved is a basket or a reflection
+    # that flickered, and holding it for 30 s invents a browser. Roughly one body
+    # width of real movement away from where it first appeared, measured as peak
+    # excursion so jitter cannot accumulate into a fake journey.
+    static_min_travel_px: float = 40.0
+    # ...and it has to *stay* that far away for this many frames. A single merge
+    # with a passing shopper yanks one measurement across the aisle and would
+    # otherwise count as a 162 px journey for a basket that never moved.
+    static_min_far_frames: int = 5
+    # Confirmed for this many frames without ever moving that far, and it is not a
+    # shopper at all: a trolley wheel or a glossy basket the background model keeps
+    # flagging. Shorter than min_visit_s so it never registers as a visit.
+    furniture_age: int = 25
+    # Retiring furniture is not enough -- the blob is still there next frame and
+    # spawns a fresh track, counted for 23 of every 26 frames. Remember where
+    # furniture was and refuse to start tracks there for this long (40 s at 15 fps).
+    furniture_memory: int = 600
+    # When a track dies and a new one is born on the same spot moments later, it
+    # is the same person -- id churn, not a new arrival. The child inherits that
+    # its predecessor walked here, so a shopper standing at a shelf whose track
+    # got recycled is not mistaken for furniture. Ids stay ephemeral regardless.
+    relink_memory: int = 45             # 3 s at 15 fps
 
     # --- guards ---
     flood_area_frac: float = 0.40       # blob area over this fraction = bad frame

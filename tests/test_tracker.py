@@ -259,3 +259,127 @@ def test_a_held_track_reattaches_when_the_person_moves_again():
     boxes += [[(154 + 6 * i, 200, 40, 136)] for i in range(10)]
     tk, ids = run(boxes)
     assert ids[-1] == [0], "a browser who starts walking again should keep their id"
+
+
+def test_a_blob_that_flickered_in_place_is_not_held_as_a_browser():
+    """A basket catching the light appears, sits, vanishes. It never walked
+    anywhere, so it is not a shopper who stopped -- do not hold it for 30 s."""
+    flicker = [[(300, 300, 40, 136)] for _ in range(6)] + [[] for _ in range(40)]
+    _, ids = run(flicker)
+    assert ids[-1] == [], "held a stationary noise blob as if it were a shopper"
+
+
+def test_a_real_browser_walked_to_the_shelf_and_is_held():
+    """Same shape as the flicker, but preceded by a walk: that is a person."""
+    _, ids = run(walk_then_stand(walk=10, stand=6, vanish=40))
+    assert ids[-1] == [0]
+
+
+def test_the_travel_requirement_is_configurable():
+    flicker = [[(300, 300, 40, 136)] for _ in range(6)] + [[] for _ in range(40)]
+    _, ids = run(flicker, params=TrackerParams(static_min_travel_px=0.0))
+    assert ids[-1] == [0], "with no travel requirement the flicker should be held"
+
+
+# --- furniture ------------------------------------------------------------
+# A trolley wheel or a glossy basket that the background model keeps flagging
+# gets a real match every frame, so it looks like a perfectly tracked person with
+# zero speed. The hold logic never sees it. It has to be caught by the one thing
+# a shopper always has and furniture never does: it walked here.
+
+def test_a_static_object_flagged_every_frame_is_retired_as_furniture():
+    static = [[(300, 300, 40, 136)] for _ in range(60)]
+    tk, ids = run(static)
+    assert ids[-1] == [], "counted a never-moving blob as a shopper"
+    assert tk.tracks == []
+
+
+def test_furniture_is_flagged_so_the_pipeline_can_skip_its_visit():
+    tk = Tracker(TrackerParams())
+    flags = []
+    for i in range(40):
+        tk.update(sc.frame_from_boxes(i, [(300, 300, 40, 136)]).blobs, i / 15.0)
+        flags += [t.furniture for t in tk.just_deleted]
+    assert flags == [True]
+
+
+def test_a_newly_confirmed_walker_counts_before_walking_a_body_width():
+    """The filter must not delay real people: at 3 hits they have moved 18 px."""
+    _, ids = run(sc.linear_walk(n=6))
+    assert ids[2] == [0]
+
+
+def test_a_shopper_who_walked_in_and_stopped_is_never_mistaken_for_furniture():
+    boxes = [[(100 + 6 * i, 200, 40, 136)] for i in range(10)]
+    boxes += [[(154, 200, 40, 136)] for _ in range(90)]        # 6 s standing still
+    _, ids = run(boxes)
+    assert ids[-1] == [0], "retired a real browser as furniture"
+    assert all(frame == [0] for frame in ids[3:]), "occupancy dipped while they browsed"
+
+
+def test_furniture_retirement_age_is_configurable():
+    static = [[(300, 300, 40, 136)] for _ in range(60)]
+    _, ids = run(static, params=TrackerParams(furniture_age=10_000))
+    assert ids[-1] == [0]
+
+
+def test_retired_furniture_does_not_respawn_as_a_new_track_every_two_seconds():
+    """Retiring is not enough: the blob is still there next frame. Without a
+    memory of where furniture was, it respawns and is counted 23 frames in 26."""
+    static = [[(300, 300, 40, 136)] for _ in range(200)]
+    _, ids = run(static)
+    after_first_retirement = ids[40:]
+    assert all(frame == [] for frame in after_first_retirement), \
+        f"furniture respawned: {sorted({i for f in after_first_retirement for i in f})}"
+
+
+def test_furniture_memory_expires_once_the_object_stops_being_flagged():
+    """While the basket keeps getting flagged the memory is refreshed on purpose.
+    Once it is gone for longer than the memory, a blob there is a new arrival."""
+    box = (300, 300, 40, 136)
+    boxes = [[box] for _ in range(40)]          # retired as furniture around frame 26
+    boxes += [[] for _ in range(40)]            # gone; memory (30 frames) lapses
+    boxes += [[box] for _ in range(20)]         # something appears there again
+    _, ids = run(boxes, params=TrackerParams(furniture_memory=30))
+    assert ids[-1] != [], "memory never expired"
+
+
+def test_a_real_person_walking_past_remembered_furniture_is_still_tracked():
+    """Spawn suppression must only stop *new* tracks on the furniture, never an
+    existing walker who passes through that spot."""
+    static = (300, 300, 40, 136)
+    boxes = [[static] for _ in range(40)]                          # furniture retires
+    boxes += [[static, (100 + 8 * i, 300, 40, 136)] for i in range(40)]  # walker passes
+    _, ids = run(boxes)
+    walker_frames = [f for f in ids[45:]]
+    assert all(len(f) == 1 for f in walker_frames), \
+        f"lost the walker near furniture: {[len(f) for f in walker_frames]}"
+
+
+def test_one_merge_blip_does_not_make_a_basket_look_like_it_walked():
+    """A single frame where the basket's blob merged with a passer-by and the
+    measurement jumped 150 px must not count as a journey."""
+    static = (300, 300, 40, 136)
+    boxes = [[static] for _ in range(10)] + [[(450, 300, 40, 136)]] + [[static] for _ in range(60)]
+    tk, ids = run(boxes)
+    assert ids[-1] == [], "one outlier measurement earned a basket a 30 s hold"
+
+
+# --- id churn vs furniture ------------------------------------------------
+def test_a_shopper_whose_track_was_recycled_while_standing_is_not_furniture():
+    """Walk in, stand. The track dies (a bad frame), a fresh one is born on the
+    same spot. That person walked here; the new track must know it."""
+    p = TrackerParams(max_age=3)
+    boxes = [[(100 + 6 * i, 200, 40, 136)] for i in range(10)]      # walks 54 px
+    boxes += [[(154, 200, 40, 136)] for _ in range(5)]              # stands
+    boxes += [[] for _ in range(6)]                                 # blob gone: track dies
+    boxes += [[(154, 200, 40, 136)] for _ in range(90)]             # still standing
+    tk, ids = run(boxes, params=p)
+    assert ids[-1] != [], "the recycled track was retired as furniture"
+    assert not any(t.furniture for t in tk.just_deleted)
+
+
+def test_true_furniture_has_no_walking_predecessor_and_is_still_retired():
+    static = [[(300, 300, 40, 136)] for _ in range(80)]
+    _, ids = run(static, params=TrackerParams(max_age=3))
+    assert ids[-1] == []
