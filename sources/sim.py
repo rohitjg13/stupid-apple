@@ -27,9 +27,21 @@ class _Walker:
 
     def __init__(self, rng, zones, tid):
         self.rng, self.tid = rng, tid
-        self.pos = np.array([rng.uniform(0.5, 2.5), 0.2])
+        # Spawn *outside* the door, not on it. Walkers step once before their
+        # first blob is rendered, so a spawn at Y=0.2 (v=464) is already past the
+        # door tripwire at v=460 by the time it is first visible, and the entry
+        # can never be observed. Starting outside makes the crossing real.
+        self.pos = np.array([rng.uniform(0.5, 2.5), -0.4])
         self.targets = [self._point(rng, z) for z in rng.choice(zones, size=2, replace=False)]
         self.targets.append(np.array([rng.uniform(3.5, 7.5), 1.0]))   # checkout
+        # Then back to the door before leaving. Without this, walkers exit from
+        # wherever the checkout put them (X 3.5-7.5, so u 280-600) and walk out
+        # through the wall, missing the door tripwire's u span of 40-240 entirely
+        # -- entries counted, exits not, and occupancy drifts away from the count.
+        # Y=1.2 m, not right on the line: walkers dwell at their last target, and
+        # a target on top of the tripwire makes them straddle it for 3-25 s and
+        # fire a crossing every debounce period.
+        self.targets.append(np.array([rng.uniform(0.5, 2.5), 1.2]))     # the door
         self.dwell = 0.0
         self.done = False
         self.size = rng.uniform(0.85, 1.15)     # people are not all one size
@@ -52,7 +64,10 @@ class _Walker:
         dist = np.linalg.norm(delta)
         if dist < 0.2:
             self.targets.pop(0)
-            self.dwell = self.rng.uniform(3.0, 25.0)
+            # No loitering on the last target, which is the door: a crowd standing
+            # on the exit merges into shared blobs, churns track ids, and every new
+            # id crossing the line counts as another exit.
+            self.dwell = self.rng.uniform(3.0, 25.0) if self.targets else 0.0
             return
         self.pos = self.pos + delta / dist * min(1.2 * dt, dist)
 

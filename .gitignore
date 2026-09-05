@@ -5,3 +5,8 @@ __pycache__/
 .DS_Store
 footage/
 *.egg-info/
+.venv/
+venv/
+ssh_plan_new/
+results/
+vid/out/

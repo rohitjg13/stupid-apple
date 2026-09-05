@@ -1,0 +1,22 @@
+# Shopper tracker parameters for the sim clipset (shopper/params.py).
+# Only values empirically tuned on *this* clipset are listed; everything else
+# stays at the documented defaults. Real footage gets its own tracker.yaml.
+
+# Fragments of one body are near-perfectly aligned horizontally. Measured on
+# 3900 sim frames, where nobody ever fragments so every merge is a false one:
+# 0.5 -> 1118 bad frames, 0.7 -> 833, 0.85 -> 510, 0.95 -> 192.
+merge_x_tol: 0.95
+
+# Hysteresis band around a tripwire, in pixels. config/sim puts the door line
+# inside the walkable entrance zone, so shoppers stand across it; without a band
+# 69 tracks fired more than once. Must stay under 20: on the exit side the blob
+# clips at the frame edge, so a 30 px band is unreachable and loses 96% of exits.
+tripwire_deadband_px: 12.0
+
+# The furniture filter is OFF for the sim. It exists for trolley wheels and glossy
+# baskets that a real background model keeps flagging; the sim renders clean
+# rectangles and has no such noise, so here it can only misfire. Measured over
+# 1000 s: with it on, 32 real walkers were retired as furniture and entries fell
+# from -20% to -24%, because a retired orphan's spot blocks new spawns for 40 s
+# right where arrivals appear. Real-footage clipsets keep the default.
+furniture_age: 1000000

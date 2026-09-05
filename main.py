@@ -18,6 +18,7 @@ from core.bus import Bus
 from core.clock import Clock
 from core.config import load_clipset
 from core.events import Event
+from shopper.pipeline import ShopperPipeline
 from pathlib import Path
 
 log = logging.getLogger("main")
@@ -53,6 +54,9 @@ def build_backend(backend, cfg):
     if backend == "reference":
         from pl.reference import ReferenceBackend
         return ReferenceBackend(cfg)
+    if backend == "yolo":
+        from pl.yolo import YoloBackend
+        return YoloBackend(cfg)
     if backend == "pl":
         try:
             from pl import driver
@@ -63,7 +67,7 @@ def build_backend(backend, cfg):
         # Khushwant owns pl/driver.py. Accept either shape his plan allows:
         # a Driver class, or module-level process()/read_latency_cycles().
         return driver.Driver(cfg) if hasattr(driver, "Driver") else driver
-    raise SystemExit(f"unknown --backend {backend!r}; expected sim, reference or pl")
+    raise SystemExit(f"unknown --backend {backend!r}; expected sim, reference, yolo or pl")
 
 
 def check_backend(backend):
@@ -126,6 +130,7 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
     for t in threads:
         t.start()
 
+    shopper = ShopperPipeline(cfg, bus)
     clock = clock or Clock(clock_state)
     if not clock.synced:
         log.warning("starting with an unsynced clock; cloud sync will wait")
@@ -146,12 +151,7 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
         t = epoch_base + (frame.t_ns - base) / 1e9         # SHARED.md §5: converted once
 
         if frame.stream == "overhead":
-            # ponytail: raw blob count until Manan's tracker lands in W2. It is the
-            # number the Friday demo needs and it is honest about what it measures.
-            if t - last_pub.get("overhead", -1e9) >= 1.0:
-                last_pub["overhead"] = t
-                bus.publish(Event(t, cfg.store_id, "overhead", None, "occupancy",
-                                  {"count": int(frame.result["num_blobs"])}))
+            shopper.on_frame(frame, t)
         else:
             for roi_id, i in cfg.roi_index.items():
                 if t - last_pub.get(roi_id, -1e9) >= 1.0:
@@ -172,6 +172,7 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
             time.sleep(max(0.0, 1.0 / max(sources[frame.stream].fps, 1) - 0.001))
 
     stop.set()
+    shopper.close()
     for src in sources.values():
         src.close()
     clock.persist()
@@ -186,7 +187,7 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
 def main(argv=None):
     p = argparse.ArgumentParser(description="Intelligent retail analytics on PYNQ-Z2")
     p.add_argument("--source", default="sim", choices=["sim", "file", "camera"])
-    p.add_argument("--backend", default="sim", choices=["sim", "reference", "pl"])
+    p.add_argument("--backend", default="sim", choices=["sim", "reference", "yolo", "pl"])
     p.add_argument("--config", default="config/sim")
     p.add_argument("--frames", type=int, default=0, help="0 = run forever")
     p.add_argument("--headless", action="store_true")
