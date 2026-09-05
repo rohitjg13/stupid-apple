@@ -57,7 +57,8 @@ class Track:
     """One person, alive across frames."""
 
     __slots__ = ("id", "kf", "state", "hits", "age", "time_since_update",
-                 "shared_frames", "trail", "box", "born_t", "last_t")
+                 "shared_frames", "held", "trail", "recent", "seen_speed",
+                 "box", "born_t", "last_t")
 
     def __init__(self, track_id, bbox, t, params):
         self.id = track_id
@@ -67,6 +68,11 @@ class Track:
         self.age = 1
         self.time_since_update = 0
         self.shared_frames = 0
+        self.held = 0
+        # Speed at the last frame we actually saw them. Once the blob is gone the
+        # box only coasts, so its apparent speed is the motion model talking to
+        # itself; the honest question is whether they were moving when last seen.
+        self.seen_speed = float("inf")
         self.box = tuple(float(v) for v in bbox)
         self.born_t = float(t)
         self.last_t = float(t)
@@ -75,7 +81,14 @@ class Track:
         # long before the 3-hit confirmation; without this buffer every entry is
         # missed. Real footage has the same shape -- people enter at a frame edge.
         self.trail = deque(maxlen=max(params.n_init + 2, 4))
+        # Where the box actually has been. The Kalman velocity lags hard when
+        # someone decelerates -- measured at 1.7-2.1 px/frame for people who had
+        # already stopped, against a 2.6-3.6 walking speed -- so judging "is this
+        # person standing still" on it drops browsers just as they settle. Real
+        # displacement over a second does not lag.
+        self.recent = deque(maxlen=8)
         self._push_trail(t)
+        self.recent.append((self.box[0], self.box[1]))
 
     def _push_trail(self, t):
         x, y, w, h = self.box
@@ -88,20 +101,36 @@ class Track:
         return (x + w / 2.0, y + h)
 
     @property
+    def speed(self) -> float:
+        """Average px/frame actually travelled recently, not the KF estimate."""
+        if len(self.recent) < 2:
+            return float("inf")
+        (x0, y0), (x1, y1) = self.recent[0], self.recent[-1]
+        return ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5 / (len(self.recent) - 1)
+
+    @property
     def is_active(self) -> bool:
-        """Confirmed and seen this frame: what occupancy and the heatmap count."""
+        """Confirmed and present: what occupancy, visits and the heatmap count.
+
+        A held track counts. Someone browsing a shelf has not left the shop just
+        because the background model stopped noticing them.
+        """
         return self.state == CONFIRMED and self.time_since_update == 0
 
     def predict(self):
         self.box = self.kf.predict()
         self.age += 1
+        self.recent.append((self.box[0], self.box[1]))
 
     def update(self, bbox, t, params):
         self.box = self.kf.update(bbox)
         self.last_t = float(t)
         self.time_since_update = 0
         self.shared_frames = 0
+        self.held = 0
         self._push_trail(t)
+        self.recent.append((self.box[0], self.box[1]))
+        self.seen_speed = self.speed
         self.hits += 1
         if self.state == LOST:
             self.state = CONFIRMED          # a lost track was confirmed once already
@@ -123,6 +152,26 @@ class Track:
         self._push_trail(t)
 
     def mark_missed(self, t, params):
+        # Standing still and the blob went away? They did not walk out -- walking
+        # out requires walking. The background model simply learned them as
+        # furniture. Keep them, and keep counting their dwell.
+        if (self.state in (CONFIRMED, LOST) and self.held < params.static_max_age
+                and self.seen_speed < params.static_speed_px):
+            # LOST is included deliberately. Judging this on one frame makes it a
+            # one-way door: a browser whose measured speed blips over the line for
+            # a single frame could never be held again, and died 2 s later.
+            self.state = CONFIRMED
+            self.held += 1
+            self.time_since_update = 0
+            # Stop coasting. We have just decided this person is standing still,
+            # so the motion model should say so -- otherwise the box drifts off
+            # them on stale velocity, which both loses the person and keeps the
+            # measured speed hovering at the threshold that decides the hold.
+            self.kf.x[4:] = 0.0
+            self.box = self.kf.bbox
+            self.last_t = float(t)
+            self._push_trail(t)
+            return
         self.time_since_update += 1
         self.last_t = float(t)
         if self.state == TENTATIVE:

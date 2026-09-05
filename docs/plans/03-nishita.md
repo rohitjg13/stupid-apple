@@ -62,7 +62,17 @@ in `docs/DPDP.md`. MOG2 blobs from the fabric plus IoU tracking is the design.
    measurements: 9.6× id churn and 15.6 tracked people where there were 12.6.
    A claimant is now a confirmed track whose *own best* match is that blob, at
    the confident threshold.
-7. **Foot points are buffered from track birth**, not from confirmation, and
+7. **A background subtractor cannot see people who stand still**, which is
+   exactly the shopper dwell time exists to measure. MOG2 learns a stationary
+   person into the background as furniture: on a browsing clip it found *zero*
+   blobs with four people standing in frame. The tracker compensates -- a track
+   that loses its blob while stationary almost certainly did not leave, because
+   leaving requires moving -- so it is held, frozen in place, and keeps being
+   counted. Mean occupancy error on that clip went from 2.89 people to **0.00**.
+   The other half of the fix is `MOG2_LR`, which is Rohit's and Khushwant's
+   register: at the 0.005 default, people were visible in 136 of 368 frames of
+   real supermarket footage; at 0.0005, 363 of 368.
+8. **Foot points are buffered from track birth**, not from confirmation, and
    replayed once when the track confirms. People cross a tripwire at the frame
    edge within a frame or two of appearing, long before a 3-hit confirmation.
 

@@ -202,3 +202,60 @@ def test_kalman_predicted_box_never_collapses():
     for _ in range(500):
         kf.predict()
     assert kf.bbox[2] >= 1.0 and kf.bbox[3] >= 1.0
+
+
+# --- standing still -------------------------------------------------------
+# A background subtractor sees change, so it goes blind to anyone who stops
+# moving -- exactly the shopper whose dwell time the product is built to
+# measure. These cover holding them anyway.
+
+def walk_then_stand(walk=10, stand=6, vanish=60, x0=100, y0=200, dx=6):
+    """Walk in, stand still for a moment, then the blob is absorbed away."""
+    boxes = [[(x0 + dx * i, y0, 40, 136)] for i in range(walk)]
+    x = x0 + dx * (walk - 1)
+    boxes += [[(x, y0, 40, 136)] for _ in range(stand)]
+    return boxes + [[] for _ in range(vanish)]
+
+
+def test_a_browser_absorbed_into_the_background_is_still_counted():
+    _, ids = run(walk_then_stand())
+    assert ids[-1] == [0], "lost the shopper the moment they stopped moving"
+
+
+def test_a_held_browser_does_not_drift_away_from_where_they_stand():
+    tk, _ = run(walk_then_stand())
+    x_standing = 100 + 6 * 9
+    assert abs(tk.tracks[0].box[0] - x_standing) < 10, \
+        f"held track drifted to {tk.tracks[0].box[0]:.0f}, person is at {x_standing}"
+
+
+def test_holding_is_bounded():
+    p = TrackerParams(static_max_age=20)
+    _, ids = run(walk_then_stand(vanish=80), params=p)
+    assert ids[-1] == [], "a held track must eventually be given up on"
+
+
+def test_holding_can_be_switched_off():
+    _, ids = run(walk_then_stand(), params=TrackerParams(static_max_age=0))
+    assert ids[-1] == []
+
+
+def test_someone_who_walks_out_is_not_held():
+    """Leaving requires moving, so a fast track that vanishes really has gone."""
+    _, ids = run(sc.linear_walk(n=12, dx=9) + [[] for _ in range(60)])
+    assert ids[-1] == [], "held a track that walked out of frame"
+
+
+def test_a_one_frame_speed_blip_does_not_condemn_a_browser():
+    """The hold must not be a one-way door; lost tracks can be reclaimed."""
+    boxes = walk_then_stand(stand=3, vanish=60)
+    tk, ids = run(boxes)
+    assert ids[-1] == [0]
+    assert tk.tracks[0].held > 0
+
+
+def test_a_held_track_reattaches_when_the_person_moves_again():
+    boxes = walk_then_stand(stand=4, vanish=30)
+    boxes += [[(154 + 6 * i, 200, 40, 136)] for i in range(10)]
+    tk, ids = run(boxes)
+    assert ids[-1] == [0], "a browser who starts walking again should keep their id"

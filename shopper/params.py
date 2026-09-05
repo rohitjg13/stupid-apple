@@ -52,6 +52,14 @@ class TrackerParams:
     heatmap_decay_per_s: float = 0.98   # live tile only; the event is undecayed
     entrance_zone: str = "entrance"     # excluded from the occupancy count
 
+    # --- standing still ---
+    # A background subtractor sees *change*, so it goes blind to anyone who stops
+    # moving -- which is precisely the shopper dwell time exists to measure. But
+    # a track that loses its blob while stationary almost certainly did not leave,
+    # because leaving requires moving. Hold it, and keep counting it.
+    static_speed_px: float = 1.5        # px/frame; a walking person is ~6
+    static_max_age: int = 450           # 30 s at 15 fps before we admit defeat
+
     # --- guards ---
     flood_area_frac: float = 0.40       # blob area over this fraction = bad frame
     flood_pause_s: float = 2.0
