@@ -71,6 +71,23 @@ def test_event_time_follows_stream_time_not_the_wall_clock():
     assert all(0.9 <= g <= 1.15 for g in gaps), gaps
 
 
+def test_health_file_is_written(tmp_path):
+    import json
+    hp = tmp_path / "health.json"
+    run(config="config/sim", source="sim", backend="sim", frames=40, realtime=False,
+        health_file=hp, clock_state=tmp_path / "clock.json")
+    h = json.loads(hp.read_text())
+    assert h["store_id"] == "demo-01" and h["frames"] == 40
+    assert h["clock_unsynced"] is False and h["running"] is False
+
+
+def test_run_never_writes_outside_the_given_state_path(tmp_path):
+    """Offline-first: no writes to /var on a laptop, and no crash either."""
+    run(config="config/sim", source="sim", backend="sim", frames=20, realtime=False,
+        clock_state=tmp_path / "sub" / "clock.json")
+    assert (tmp_path / "sub" / "clock.json").exists()
+
+
 def test_pl_backend_refuses_to_start_without_a_board():
     """Never silently run reference while the judges are told it is the FPGA."""
     with pytest.raises(SystemExit):
