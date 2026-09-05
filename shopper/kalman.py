@@ -1,10 +1,13 @@
 """An 8-state constant-velocity Kalman filter over one bounding box.
 
 State is `[cx, cy, w, h, vcx, vcy, vw, vh]` in full-res image pixels; the
-measurement is the box alone. Noise scales with box height, so a person near the
-camera (big box, fast apparent motion) gets a looser gate than one far away --
-the standard SORT/DeepSORT trick, and it matters on an overhead view where
-apparent speed varies a lot across the floor.
+measurement is the box alone. Only position is extrapolated -- see `F` for why
+size velocity is deliberately left out of the transition.
+
+Noise scales with box height, so a person near the camera (big box, fast
+apparent motion) gets a looser gate than one far away -- the standard
+SORT/DeepSORT trick, and it matters on an overhead view where apparent speed
+varies a lot across the floor.
 
 Hand-rolled on purpose: `filterpy` is not in the board dependency list in
 pyproject.toml and this is 8x8 linear algebra, not a library problem.
@@ -37,7 +40,14 @@ class KalmanBox:
 
     def __init__(self, bbox, dt: float = 1.0):
         self.F = np.eye(8)
-        for i in range(4):
+        # Constant velocity on *position* only. Size is a random walk: it still
+        # tracks a measured box growing or shrinking, but is never extrapolated.
+        # With size velocity, a few frames of a person being absorbed into the
+        # background teach the filter a steep negative height rate, and the moment
+        # the blob vanishes the coasting box collapses to a 1 px sliver that
+        # overlaps nothing -- the track can never re-match and dies. A person does
+        # not shrink to nothing because we stopped seeing them.
+        for i in range(2):
             self.F[i, i + 4] = dt
         self.H = np.zeros((4, 8))
         self.H[:, :4] = np.eye(4)

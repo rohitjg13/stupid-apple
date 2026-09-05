@@ -383,3 +383,27 @@ def test_true_furniture_has_no_walking_predecessor_and_is_still_retired():
     static = [[(300, 300, 40, 136)] for _ in range(80)]
     _, ids = run(static, params=TrackerParams(max_age=3))
     assert ids[-1] == []
+
+
+# --- size must not be extrapolated -------------------------------------------
+def test_a_coasting_box_keeps_its_size_after_the_blob_shrank():
+    """arcade1, track #17: 121 px tall, blob shrinks for a few frames as the
+    shopper is absorbed into the background, blob vanishes, box coasts to 1 px.
+    A 1 px box overlaps nothing, so the track could never re-match."""
+    kf = KalmanBox((100, 200, 40, 136))
+    for i, h in enumerate((130, 120, 105, 88, 70)):          # absorption in progress
+        kf.predict()
+        kf.update((100, 200 + (136 - h), 40, h))
+    for _ in range(30):                                       # blob gone; coast
+        kf.predict()
+    assert kf.bbox[3] > 40, f"box collapsed to {kf.bbox[3]:.0f} px while coasting"
+
+
+def test_size_still_follows_measurements():
+    """Not extrapolating size must not mean ignoring it."""
+    kf = KalmanBox((100, 200, 40, 136))
+    for _ in range(20):
+        kf.predict()
+        kf.update((100, 200, 60, 180))
+    assert kf.bbox[2] == pytest.approx(60, abs=3)
+    assert kf.bbox[3] == pytest.approx(180, abs=5)

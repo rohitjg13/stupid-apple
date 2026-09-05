@@ -147,8 +147,12 @@ def main(argv=None):
     ap.add_argument("--stream", default="overhead")
     ap.add_argument("--out", default=None, help="write an mp4 instead of a window")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--bg-lr", type=float, default=0.005,
-                    help="MOG2 learning rate; lower keeps still people longer")
+    ap.add_argument("--bg-lr", type=float, default=None,
+                    help="MOG2 learning rate; lower keeps still people longer. "
+                         "Default: the 0.005 register default scaled to the clip's "
+                         "fps, because the rate is per frame and 0.005 was tuned "
+                         "at 15 fps -- a 30 fps clip would otherwise absorb people "
+                         "twice as fast")
     ap.add_argument("--morph", type=int, default=1, help="opening passes; 2 kills noise")
     ap.add_argument("--high-area", type=int, default=None,
                     help="confident-blob area; lower when people are small in frame")
@@ -179,6 +183,11 @@ def main(argv=None):
 
     cfg = load_clipset(config)
     src = build_source(a.source, cfg, a.stream, seed=a.seed)
+    if a.bg_lr is None:
+        a.bg_lr = 0.005 * 15.0 / max(float(src.fps), 1.0)
+        if a.video:
+            log.info("background rate %.4f (0.005 at 15 fps, scaled to %.0f fps)",
+                     a.bg_lr, src.fps)
     be = build_backend(a.backend, cfg)
     if a.backend == "reference":
         from pl.reference import ReferenceBackend
