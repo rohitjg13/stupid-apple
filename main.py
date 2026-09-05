@@ -55,7 +55,9 @@ def build_backend(backend, cfg):
         return ReferenceBackend(cfg)
     if backend == "pl":
         from pl import driver
-        return driver.Driver(cfg)
+        # Khushwant owns pl/driver.py. Accept either shape his plan allows:
+        # a Driver class, or module-level process()/read_latency_cycles().
+        return driver.Driver(cfg) if hasattr(driver, "Driver") else driver
     raise SystemExit(f"unknown --backend {backend!r}; expected sim, reference or pl")
 
 
