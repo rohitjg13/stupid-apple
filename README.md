@@ -31,6 +31,15 @@ against.
 See `docs/BOARD.md`. Short version: `tools/deploy.sh`, then
 `systemctl start retail`.
 
+## Dashboard (Svelte + Vite)
+
+The frontend dashboard is built with Svelte and Vite.
+
+```bash
+npm install
+npm run dev
+```
+
 ## Layout
 
 | Path | What |
@@ -41,6 +50,7 @@ See `docs/BOARD.md`. Short version: `tools/deploy.sh`, then
 | `geometry/` | image↔floor homography, zone raster, calibration tool |
 | `tools/` | perf, backend comparison, accuracy evaluation, deploy, transcode |
 | `docs/` | shared context, plans, demo script, test protocol, DPDP, risks, cuts |
+| `src/` | Svelte frontend dashboard source code |
 
 ## Rules that are not negotiable
 
