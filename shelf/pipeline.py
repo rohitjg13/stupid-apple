@@ -20,7 +20,8 @@ class ShelfPipeline:
         planogram: List[dict],
         store_id: str = "demo-01",
         bus: Optional[Bus] = None,
-        use_detector: bool = False,
+        use_detector: bool = True,
+        detector_model: str = "yolo",
     ):
         self.store_id = store_id
         self.bus = bus
@@ -29,7 +30,7 @@ class ShelfPipeline:
         self.planogram_auditor = PlanogramAuditor(planogram=planogram, store_id=store_id)
         self.inventory_tracker = InventoryTracker(planogram=planogram, store_id=store_id)
         self.pick_detector = ShelfPickDetector(rois=rois)
-        self.detector = ShelfEdgeDetector(model_type="fast_cv") if use_detector else None
+        self.detector = ShelfEdgeDetector(model_type=detector_model) if use_detector else None
         self._roi_index = {r["id"]: i for i, r in enumerate(rois)}
         self._rois_raw = rois
 

@@ -26,7 +26,10 @@ class ShelfEdgeDetector:
         results = {}
 
         if self.model_type == "yolo" and self._yolo is not None:
-            preds = self._yolo(image, verbose=False)[0]
+            inp = image
+            if len(image.shape) == 2 or image.shape[2] == 1:
+                inp = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            preds = self._yolo(inp, verbose=False)[0]
             boxes = preds.boxes.xyxy.cpu().numpy() if len(preds.boxes) else []
             classes = preds.boxes.cls.cpu().numpy() if len(preds.boxes) else []
             confs = preds.boxes.conf.cpu().numpy() if len(preds.boxes) else []

@@ -23,9 +23,15 @@ from core.config import load_clipset
 from shelf.pipeline import ShelfPipeline
 from shelf.fill import ShelfStatus
 
-def run_shelf_demo(config_path: str, video_source: str, headless: bool = False, max_frames: int = 0):
+def run_shelf_demo(config_path: str, video_source: str, headless: bool = False, max_frames: int = 0, detector_model: str = "yolo"):
     cfg = load_clipset(config_path)
-    pipe = ShelfPipeline(rois=cfg.rois, planogram=cfg.planogram, store_id=cfg.store_id)
+    pipe = ShelfPipeline(
+        rois=cfg.rois,
+        planogram=cfg.planogram,
+        store_id=cfg.store_id,
+        use_detector=True,
+        detector_model=detector_model,
+    )
 
     src = int(video_source) if video_source.isdigit() else video_source
     cap = cv2.VideoCapture(src)
@@ -131,6 +137,7 @@ if __name__ == "__main__":
     parser.add_argument("--video", default="ref_vid/VID-20260906-WA0004.mp4", help="Video path or camera index")
     parser.add_argument("--headless", action="store_true", help="Run without UI window")
     parser.add_argument("--frames", type=int, default=0, help="Max frames to process")
+    parser.add_argument("--detector", default="yolo", choices=["yolo", "fast_cv"], help="Detector backend (yolo or fast_cv)")
     args = parser.parse_args()
 
-    run_shelf_demo(args.config, args.video, headless=args.headless, max_frames=args.frames)
+    run_shelf_demo(args.config, args.video, headless=args.headless, max_frames=args.frames, detector_model=args.detector)
