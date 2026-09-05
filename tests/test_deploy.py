@@ -94,3 +94,20 @@ def test_pl_backend_refused_when_driver_reports_unavailable(monkeypatch):
     monkeypatch.setitem(sys.modules, "pl.driver", fake_driver_module(available=False))
     with pytest.raises(SystemExit):
         main.check_backend("pl")
+
+
+def test_missing_driver_module_gives_a_useful_message(monkeypatch):
+    """pl/driver.py does not exist yet; the error must say so, not ImportError."""
+    import builtins
+
+    import main
+    real = builtins.__import__
+
+    def no_driver(name, *a, **kw):
+        if name == "pl" and a and a[2] and "driver" in a[2]:
+            raise ImportError("cannot import name 'driver'")
+        return real(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", no_driver)
+    with pytest.raises(SystemExit, match="driver.py"):
+        main.build_backend("pl", load_clipset("config/sim"))

@@ -110,9 +110,16 @@ def main(argv=None):
     for i, frame in enumerate(src.frames()):
         if i >= a.frames:
             break
+        if frame.image is None:
+            src.close()
+            raise SystemExit(
+                f"--source {a.source} yields no images, so there is nothing for "
+                f"{a.a}/{a.b} to process; use --source file with a clip in store.yaml")
         ra.append(be_a.process(frame.image, sid, frame.frame_id).copy())
         rb.append(be_b.process(frame.image, sid, frame.frame_id).copy())
     src.close()
+    if not ra:
+        raise SystemExit("no frames read; check store.yaml path")
 
     s = compare(ra, rb, n_rois=len(cfg.rois))
     print(json.dumps(s, indent=2) if a.json else

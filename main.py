@@ -54,7 +54,12 @@ def build_backend(backend, cfg):
         from pl.reference import ReferenceBackend
         return ReferenceBackend(cfg)
     if backend == "pl":
-        from pl import driver
+        try:
+            from pl import driver
+        except ImportError as e:
+            raise SystemExit(
+                "--backend pl needs pl/driver.py, which Khushwant owns and which is "
+                f"not in this tree yet ({e}); use --backend reference on a laptop")
         # Khushwant owns pl/driver.py. Accept either shape his plan allows:
         # a Driver class, or module-level process()/read_latency_cycles().
         return driver.Driver(cfg) if hasattr(driver, "Driver") else driver
