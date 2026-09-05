@@ -10,3 +10,5 @@ venv/
 ssh_plan_new/
 results/
 vid/out/
+.commandcode
+

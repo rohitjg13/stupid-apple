@@ -12,4 +12,4 @@ testpaths = ["tests"]
 filterwarnings = ["error::DeprecationWarning"]
 
 [tool.setuptools]
-packages = ["core", "pl", "sources", "geometry", "shopper"]
+packages = ["core", "pl", "sources", "geometry", "shopper", "backend"]
