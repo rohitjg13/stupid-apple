@@ -10,3 +10,6 @@ venv/
 ssh_plan_new/
 results/
 vid/out/
+out/
+vid/
+*.pt
