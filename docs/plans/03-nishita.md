@@ -130,6 +130,32 @@ fragmentation, shadows or noise, which is exactly what the prefilter exists for.
   through the wall from the checkout, missing the door's u-span of 40–240
   entirely, and loitered on the exit once routed through it.
 
+## Trying a clip
+
+```
+tools/try_video.sh vid/arcade1.mp4                       # any video, one command
+tools/try_video.sh vid/arcade1.mp4 --bg-lr 0.0005 --morph 2
+```
+
+Runs the real chain (video → OpenCV background subtraction → tracker) with no
+door, zones or floor calibration, writes `out/<name>_tracked.mp4` and `.json`,
+prints who was present, how long they stood still and how far they walked to
+get there, paints a heatmap over the frame, and opens the result.
+
+Read the `seen in N/M frames` line first. Then the knobs, in the order they are
+usually needed on real footage:
+
+| Symptom | Knob |
+|---|---|
+| Shoppers vanish when they stand still | `--bg-lr 0.0005` (default 0.005 is ~10× too fast for retail) |
+| Boxes on shelves, reflections, produce | `--morph 2` |
+| People visible but unboxed (small in frame) | `--high-area 600` |
+| Boxes flicker between ids | camera is too low; get it higher |
+
+The door line and zone labels only appear with a per-camera `--config`; without
+one they are deliberately not drawn, because the sim's floor plan painted over
+real footage is a lie.
+
 ## Performance
 
 `ShopperPipeline.on_frame` costs **0.62 ms mean / 1.08 ms p95** per frame on a
