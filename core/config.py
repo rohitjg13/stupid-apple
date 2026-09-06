@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -13,6 +14,16 @@ from pl.regs import MAX_LANES, MAX_ROIS, PL_H, PL_W
 
 class ConfigError(Exception):
     """Bad clipset. The message names the file and the offending entry."""
+
+
+def state_dir() -> Path:
+    """Where the database, clock state and uploads live.
+
+    `data/` next to the code, so a laptop needs no root and no setup. RETAIL_DATA
+    overrides it; the board's systemd unit passes /var/lib/retail paths
+    explicitly and never sees this.
+    """
+    return Path(os.environ.get("RETAIL_DATA") or Path(__file__).resolve().parent.parent / "data")
 
 
 REQUIRED = {

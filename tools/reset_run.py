@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.db import DB
+from core.config import state_dir
 
 
 def reset(db, run_id, store_id, clipset, t=None):
@@ -24,7 +25,7 @@ def reset(db, run_id, store_id, clipset, t=None):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--db", default="/var/lib/retail/retail.db")
+    ap.add_argument("--db", default=str(state_dir() / "retail.db"))
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--store-id", default="demo-01")
     ap.add_argument("--clipset", default="sim")

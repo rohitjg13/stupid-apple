@@ -16,7 +16,7 @@ import time
 
 from core.bus import Bus
 from core.clock import Clock
-from core.config import load_clipset
+from core.config import load_clipset, state_dir
 from core.events import Event
 from shopper.pipeline import ShopperPipeline
 from pathlib import Path
@@ -127,7 +127,7 @@ def write_health(path, payload):
 
 def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
         streams=("overhead", "shelf"), stop=None, clock=None, health_file=None,
-        clock_state="/var/lib/retail/clock.json", seed=0, db_path=None, run_id=None,
+        clock_state=None, seed=0, db_path=None, run_id=None,
         on_progress=None):
     """`db_path` persists every event through backend/sink.py under `run_id`.
 
@@ -182,7 +182,7 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
         from shopper.params import TrackerParams
         shopper_params = replace(TrackerParams.load(cfg.path), furniture_age=10**9)
     shopper = ShopperPipeline(cfg, bus, params=shopper_params)
-    clock = clock or Clock(clock_state)
+    clock = clock or Clock(clock_state or state_dir() / "clock.json")
     if not clock.synced:
         log.warning("starting with an unsynced clock; cloud sync will wait")
     processed, finished, last_pub = 0, 0, {}
@@ -268,7 +268,7 @@ def main(argv=None):
     p.add_argument("--frames", type=int, default=0, help="0 = run forever")
     p.add_argument("--headless", action="store_true")
     p.add_argument("--health-file", default=None, help="JSON status for the backend /health")
-    p.add_argument("--clock-state", default="/var/lib/retail/clock.json")
+    p.add_argument("--clock-state", default=str(state_dir() / "clock.json"))
     p.add_argument("--seed", type=int, default=0, help="sim determinism")
     p.add_argument("--db", default=None, help="persist events to this SQLite file")
     p.add_argument("--run-id", default=None, help="tag rows with this run id")

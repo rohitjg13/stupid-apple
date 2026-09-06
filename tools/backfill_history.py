@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.db import DB
 from backend.sink import Sink
-from core.config import load_clipset
+from core.config import load_clipset, state_dir
 from sources.sim import SimSource
 
 log = logging.getLogger("backfill")
@@ -41,7 +41,7 @@ def backfill(db, cfg, store_id, run_id, days, seed):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--db", default="/var/lib/retail/retail.db")
+    ap.add_argument("--db", default=str(state_dir() / "retail.db"))
     ap.add_argument("--config", default="config/sim")
     ap.add_argument("--days", type=float, default=7.0)
     ap.add_argument("--seed", type=int, default=0)

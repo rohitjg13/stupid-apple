@@ -25,6 +25,7 @@ class Clock:
         self.state_path = Path(state_path)
         self._sys = _system_time
         self._mono0 = time.monotonic()
+        self._warned = False
 
         last_seen = 0.0
         try:
@@ -62,7 +63,11 @@ class Clock:
             tmp.write_text(json.dumps({"last_seen": self.now(), "synced": self.synced}))
             tmp.replace(self.state_path)
         except OSError as e:
-            log.warning("cannot persist clock state", extra={"error": str(e)})
+            # Standing condition, not news: persist() runs every 10 s of footage.
+            if not self._warned:
+                self._warned = True
+                log.warning("cannot persist clock state", extra={"error": str(e),
+                                                                 "path": str(self.state_path)})
 
     def health(self) -> dict:
         return {"t": self.now(), "clock_unsynced": not self.synced,

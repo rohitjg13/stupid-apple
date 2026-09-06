@@ -35,13 +35,13 @@ import main as runner
 from backend.aggregates import Aggregates
 from backend.api import create_router
 from backend.db import DB
-from core.config import load_clipset
+from core.config import load_clipset, state_dir
 from tools import autoconfig
 
 log = logging.getLogger("server")
 
 ROOT = Path(__file__).parent
-DATA = Path(os.environ.get("RETAIL_DATA") or ROOT / "data")
+DATA = state_dir()
 WEB = ROOT / "web" / "dist"
 MAX_UPLOAD_BYTES = 2 * 1024**3          # 2 GB per clip; an SD card is not infinite
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
