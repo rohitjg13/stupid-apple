@@ -46,13 +46,21 @@ def build_source(source, cfg, stream, seed=0):
     raise SystemExit(f"unknown --source {source!r}; expected sim, file or camera")
 
 
-def build_backend(backend, cfg):
-    """None means the source already carries a FrameResult (sim)."""
+def build_backend(backend, cfg, regs=None):
+    """None means the source already carries a FrameResult (sim).
+
+    `regs` are the tunable AXI-Lite registers from SHARED.md §4
+    (MOG2_VAR_THRESH, MOG2_LR, MIN_BLOB_AREA, MORPH_ITERS). They are exposed as
+    flags rather than a new store.yaml key because the config schema is frozen,
+    and because on the board these are register writes, not configuration: the
+    same numbers have to be settable against `--backend pl` too.
+    """
+    regs = regs or {}
     if backend == "sim":
         return None
     if backend == "reference":
         from pl.reference import ReferenceBackend
-        return ReferenceBackend(cfg)
+        return ReferenceBackend(cfg, **regs)
     if backend == "pl":
         try:
             from pl import driver
@@ -108,9 +116,32 @@ def write_health(path, payload):
         log.warning("cannot write health file", extra={"error": str(e)})
 
 
+def build_backend_runtime(cfg, bus, db_path, run_id, clock, seed, cloud_url,
+                          started, serve, host, port, health):
+    """Attach the backend (storage, queue, POS, alerts) and optionally the API.
+
+    Off unless `--db` or `--serve` is given: `python main.py --source sim` has
+    to keep working on a laptop with no writable /var/lib, and CI runs it that
+    way. Returns (runtime, server) — server is None unless --serve.
+    """
+    from backend.runtime import BackendRuntime
+
+    rt = BackendRuntime(cfg, bus, db_path=db_path, run_id=run_id, clock=clock,
+                        seed=seed, cloud_url=cloud_url, started=started)
+    rt.start(started=started, clipset=cfg.path.name)
+    server = None
+    if serve:
+        from backend.server import create_app, serve_in_thread
+        app = create_app(rt.aggregates, bus=bus, health=health)
+        _thread, server = serve_in_thread(app, host=host, port=port)
+        log.info("dashboard api ready", extra={"url": f"http://{host}:{port}/api"})
+    return rt, server
+
+
 def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
         streams=("overhead", "shelf"), stop=None, clock=None, health_file=None,
-        clock_state="/var/lib/retail/clock.json", seed=0):
+        clock_state="/var/lib/retail/clock.json", seed=0, db=None, run_id=None,
+        serve=False, host="127.0.0.1", port=8000, cloud_url=None, regs=None):
     cfg = load_clipset(config)
     check_backend(backend)
     bus = bus or Bus()
@@ -119,7 +150,7 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
     sources = {s: build_source(source if cfg.streams[s].get("source") != "sim" else "sim",
                                cfg, s, seed=seed)
                for s in streams}
-    be = build_backend(backend, cfg)
+    be = build_backend(backend, cfg, regs)
     q = queue.Queue(maxsize=2)
     threads = [threading.Thread(target=capture, args=(src, q, stop), daemon=True, name=f"cap-{s}")
                for s, src in sources.items()]
@@ -131,8 +162,20 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
         log.warning("starting with an unsynced clock; cloud sync will wait")
     processed, finished, last_pub = 0, 0, {}
     epoch_base, ns_base = clock.now(), {}      # per stream: each has its own t_ns origin
+    t = epoch_base                             # last event time; also 'now' if no frames
     last_health = 0.0
     t_wall = time.monotonic()
+
+    health = {}
+
+    def health_snapshot():
+        return dict(health)
+
+    be_runtime, api_server = (None, None)
+    if db or serve:
+        be_runtime, api_server = build_backend_runtime(
+            cfg, bus, db or "retail.db", run_id, clock, seed, cloud_url,
+            epoch_base, serve, host, port, health_snapshot)
     while finished < len(sources):
         item = q.get()
         if item is None:
@@ -159,13 +202,22 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
                     bus.publish(Event(t, cfg.store_id, "shelf", roi_id, "shelf_fill",
                                       {"fill": int(frame.result["roi_fill"][i])}))
 
+        if be_runtime is not None:
+            # The backend is the only module that reads raw lane_occupancy; it
+            # turns it into lane_occ / queue_estimate / pos_txn on the bus.
+            be_runtime.on_frame(frame, t)
+            be_runtime.tick(t)
+
         processed += 1
         if t - last_health >= 10.0:
             last_health = t
             clock.persist()
-            write_health(health_file, dict(clock.health(), frames=processed,
-                                           store_id=cfg.store_id, backend=backend,
-                                           source=source, streams=list(streams)))
+            health.clear()
+            health.update(clock.health(), frames=processed, store_id=cfg.store_id,
+                          backend=backend, source=source, streams=list(streams),
+                          run_id=(be_runtime.run_id if be_runtime else None),
+                          bus_dropped=bus.dropped, running=True)
+            write_health(health_file, dict(health))
         if frames and processed >= frames:
             break
         if realtime:
@@ -175,9 +227,21 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
     for src in sources.values():
         src.close()
     clock.persist()
-    write_health(health_file, dict(clock.health(), frames=processed, store_id=cfg.store_id,
-                                   backend=backend, source=source, streams=list(streams),
-                                   running=False))
+    if be_runtime is not None:
+        # Drain the bus before the DB: the sink's inserts are still queued
+        # behind subscriber threads, and closing under them would lose them.
+        bus.drain()
+        be_runtime.tick(t)
+        bus.drain()
+        be_runtime.close()
+    if api_server is not None:
+        api_server.should_exit = True
+    health.clear()
+    health.update(clock.health(), frames=processed, store_id=cfg.store_id,
+                  backend=backend, source=source, streams=list(streams),
+                  run_id=(be_runtime.run_id if be_runtime else None),
+                  bus_dropped=bus.dropped, running=False)
+    write_health(health_file, dict(health))
     log.info("run complete", extra={"frames": processed,
                                     "fps": round(processed / max(time.monotonic() - t_wall, 1e-6), 1)})
     return processed
@@ -188,11 +252,34 @@ def main(argv=None):
     p.add_argument("--source", default="sim", choices=["sim", "file", "camera"])
     p.add_argument("--backend", default="sim", choices=["sim", "reference", "pl"])
     p.add_argument("--config", default="config/sim")
+    p.add_argument("--streams", default="overhead,shelf",
+                   help="comma-separated streams to run. A single-stream clip "
+                        "(a queue or floor clip with no shelf) must name just "
+                        "that stream: one backend is shared by both, and it "
+                        "re-warms its background model on every stream switch.")
     p.add_argument("--frames", type=int, default=0, help="0 = run forever")
     p.add_argument("--headless", action="store_true")
     p.add_argument("--health-file", default=None, help="JSON status for the backend /health")
     p.add_argument("--clock-state", default="/var/lib/retail/clock.json")
     p.add_argument("--seed", type=int, default=0, help="sim determinism")
+    p.add_argument("--db", default=None,
+                   help="SQLite path; enables the backend (storage, queue, POS, alerts)")
+    p.add_argument("--run-id", default=None,
+                   help="demo segment id; see tools/reset_run.py")
+    p.add_argument("--serve", action="store_true",
+                   help="also serve the dashboard API (implies --db retail.db)")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--cloud-url", default=None,
+                   help="override store.yaml cloud.url; see tools/cloud_receiver.py")
+    # The tunable registers from SHARED.md §4. Defaults match pl/reference.py.
+    p.add_argument("--mog2-var-thresh", type=float, default=None)
+    p.add_argument("--mog2-lr", type=float, default=None,
+                   help="background learning rate. Lower it for a queue that "
+                        "stands still: at the default a stationary shopper is "
+                        "absorbed into the background within a few seconds.")
+    p.add_argument("--min-blob-area", type=int, default=None)
+    p.add_argument("--morph-iters", type=int, default=None)
     rt = p.add_mutually_exclusive_group()
     rt.add_argument("--realtime", dest="realtime", action="store_true", default=True)
     rt.add_argument("--fast", dest="realtime", action="store_false")
@@ -206,12 +293,23 @@ def main(argv=None):
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
 
+    regs = {k: v for k, v in (("var_thresh", a.mog2_var_thresh),
+                              ("lr", a.mog2_lr),
+                              ("min_blob_area", a.min_blob_area),
+                              ("morph_iters", a.morph_iters)) if v is not None}
+
+    streams = tuple(s.strip() for s in a.streams.split(",") if s.strip())
+    unknown = [s for s in streams if s not in ("overhead", "shelf")]
+    if unknown:
+        raise SystemExit(f"unknown --streams {unknown}; expected overhead and/or shelf")
+
     bus = Bus()
     bus.subscribe("occupancy", lambda e: log.info("occupancy", extra={"count": e.payload["count"]}))
     try:
         run(a.config, a.source, a.backend, a.frames, a.realtime and not a.headless,
             bus=bus, stop=stop, health_file=a.health_file, clock_state=a.clock_state,
-            seed=a.seed)
+            seed=a.seed, db=a.db, run_id=a.run_id, serve=a.serve, host=a.host,
+            port=a.port, cloud_url=a.cloud_url, streams=streams, regs=regs)
     finally:
         bus.drain()
     return 0
