@@ -19,7 +19,11 @@ TARGETS = {
     "occupancy_mae": 1.5,           # people
     "stockout_recall": 0.95,
     "stockout_false_alarms": 1,     # per 10 minutes
+    "queue_count_mae": 1.0,         # people, plan acceptance criterion
+    "alert_lead_time_s": 120.0,     # "at least 2 min before the annotated peak"
 }
+
+LEAD_WINDOW_S = 600.0               # an alert this long before the peak predicts it
 
 
 def load_groundtruth(path):
@@ -99,7 +103,11 @@ def evaluate_queue(events, truth, tolerance_s=2.0) -> dict:
             continue
         _, p = min(candidates, key=lambda x: x[0])
         count_errs.append(abs(p[2] - row["count"]))
-        wait_errs.append(abs(p[3] - row["actual_wait_s"]))
+        # Wait times are optional: a short clip can be labelled for headcount
+        # and still contain too few service completions to time a wait. A
+        # missing label must read as "not measured", not as an error of zero.
+        if row.get("actual_wait_s") is not None:
+            wait_errs.append(abs(p[3] - row["actual_wait_s"]))
         n += 1
 
     m = {
@@ -107,8 +115,78 @@ def evaluate_queue(events, truth, tolerance_s=2.0) -> dict:
         "wait_mae": float(np.mean(wait_errs)) if wait_errs else None,
         "n": n,
     }
-    m["count_pass"] = m["count_mae"] is not None and m["count_mae"] <= 1.0
+    m["count_pass"] = (m["count_mae"] is not None
+                       and m["count_mae"] <= TARGETS["queue_count_mae"])
     return m
+
+
+QUEUE_TRUTH_KEYS = ("t", "lane", "count")      # actual_wait_s is optional
+
+
+def load_queue_truth(path):
+    """Read a queue clip's ground truth: `footage/groundtruth/<clip>.json`.
+
+    Expected shape (owned by the dashboard/footage lead, due Thu W3):
+
+        {"queue": [{"t": .., "lane": .., "count": .., "actual_wait_s": ..}, ...],
+         "peak_t": ..}     # optional: when the queue visibly peaks in the clip
+
+    `peak_t` is what the staffing lead time is measured against. If the file
+    arrives without it, `alert_lead_time` falls back to the busiest labelled
+    sample, which is the same instant whenever the labels are dense.
+    """
+    gt = json.loads(Path(path).read_text())
+    rows = gt.get("queue")
+    if rows is None:
+        raise ValueError(f"{path}: no 'queue' key; this is not a queue clip's truth")
+    for row in rows:
+        missing = [k for k in QUEUE_TRUTH_KEYS if k not in row]
+        if missing:
+            raise ValueError(f"{path}: a queue truth row is missing {missing}")
+    return rows, gt.get("peak_t")
+
+
+def store_queue_truth(db, rows, clip):
+    """Load ground truth into the `queue_truth` table for wait_pred_vs_actual."""
+    db.enqueue("DELETE FROM queue_truth WHERE clip = ?", (clip,))
+    for row in rows:
+        db.insert("queue_truth", {"clip": clip, "t": float(row["t"]),
+                                  "lane": int(row["lane"]),
+                                  "count": int(row["count"]),
+                                  "actual_wait_s": float(row["actual_wait_s"])})
+    db.drain()
+    return len(rows)
+
+
+def peak_time(truth, peak_t=None):
+    """When the queue peaks: the labelled `peak_t`, else the busiest sample."""
+    if peak_t is not None:
+        return float(peak_t)
+    if not truth:
+        return None
+    return float(max(truth, key=lambda r: r["count"])["t"])
+
+
+def alert_lead_time(events, truth, peak_t=None, rules=("staffing",)):
+    """How long before the peak the staffing alert fired. The W5 §2 number.
+
+    Positive is good: the alert came *before* the queue built. Only alerts in
+    the ten minutes leading up to the peak count — one fired half an hour early,
+    for an unrelated blip, is not a prediction of this peak.
+    """
+    peak = peak_time(truth, peak_t)
+    if peak is None:
+        return {"peak_t": None, "alert_t": None, "lead_time_s": None, "passes": False}
+    candidates = [e.t for e in events
+                  if e.event_type == "alert" and e.payload["rule"] in rules
+                  and peak - LEAD_WINDOW_S <= e.t <= peak]
+    if not candidates:
+        return {"peak_t": peak, "alert_t": None, "lead_time_s": None,
+                "passes": False}
+    first = min(candidates)
+    lead = peak - first
+    return {"peak_t": peak, "alert_t": first, "lead_time_s": lead,
+            "passes": lead >= TARGETS["alert_lead_time_s"]}
 
 
 def main(argv=None):
@@ -117,11 +195,19 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("groundtruth")
     ap.add_argument("events", help="JSON lines, one Event per line")
+    ap.add_argument("--queue", action="store_true",
+                    help="score the queue half: count MAE, wait MAE, alert lead time")
     a = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO)
-    gt = load_groundtruth(a.groundtruth)
     events = [Event(**json.loads(l)) for l in Path(a.events).read_text().splitlines() if l.strip()]
+    if a.queue:
+        truth, peak_t = load_queue_truth(a.groundtruth)
+        m = evaluate_queue(events, truth)
+        m.update(alert_lead_time(events, truth, peak_t))
+        print(json.dumps(m, indent=2))
+        return 0 if m.get("count_pass") and m.get("passes") else 1
+    gt = load_groundtruth(a.groundtruth)
     m = evaluate(events, gt)
     print(json.dumps(m, indent=2))
     return 0 if m["passes"] else 1

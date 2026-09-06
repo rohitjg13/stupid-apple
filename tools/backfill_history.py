@@ -16,6 +16,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from backend.aggregates import Aggregates
 from backend.db import DB
 from backend.sink import Sink
 from core.config import load_clipset
@@ -24,18 +25,28 @@ from sources.sim import SimSource
 log = logging.getLogger("backfill")
 
 
-def backfill(db, cfg, store_id, run_id, days, seed):
+def backfill(db, cfg, store_id, run_id, days, seed, rollup=True):
+    """Write `days` of synthetic history under one run_id, then pre-aggregate it.
+
+    The 15-minute rollup is not optional dressing: `kpi_15m` is what the
+    history charts read on the board and the only table cloud sync uploads, so
+    a backfill that skipped it would leave both empty at boot.
+    """
     src = SimSource(cfg, stream="overhead", seed=seed)
     sink = Sink(db, run_id=run_id)
     sink.start_run(store_id, cfg.path.name if hasattr(cfg, "path") else "sim", 0.0)
-    n = 0
+    n, t0, t1 = 0, None, None
     try:
         for event in src.history(days=days):
             sink.on_event(event)
             n += 1
+            t0 = event.t if t0 is None else min(t0, event.t)
+            t1 = event.t if t1 is None else max(t1, event.t)
     finally:
         src.close()
     sink.drain()
+    if rollup and t0 is not None:
+        Aggregates(db, run_id=run_id, planogram=cfg.planogram).kpi_rollup(t0, t1 + 1)
     return n
 
 
