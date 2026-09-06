@@ -17,15 +17,20 @@
   let targetWait = $state(180);
   let backend = $state('');            // '' = let the box decide
   let door = $state([[0, 400], [639, 400]]);
-  let progress = $state(null);
-  let poll = null;
+  // The floor map. Rectangles on the overhead frame, because that is the thing
+  // the operator can actually point at; the server turns them into metres.
+  let zones = $state([
+    { id: 'entrance', x: 20, y: 320, w: 220, h: 140 },
+    { id: 'checkout', x: 380, y: 320, w: 240, h: 140 },
+    { id: 'aisle_a', x: 20, y: 140, w: 280, h: 160 },
+    { id: 'aisle_b', x: 320, y: 140, w: 300, h: 160 },
+    { id: 'promo', x: 20, y: 20, w: 600, h: 100 },
+  ]);
+  let liveMode = $state(true);
 
   const roleOf = (i) => (i === 0 ? 'overhead' : 'shelf');
   let hasOverhead = $derived(files.some((f) => f.role === 'overhead'));
   let hasShelf = $derived(files.some((f) => f.role === 'shelf'));
-  let pct = $derived(
-    progress?.total ? Math.min(100, (progress.processed / progress.total) * 100) : null,
-  );
 
   function addFiles(list) {
     const incoming = [...list].filter((f) => f.size > 0);
@@ -57,13 +62,14 @@
     busy = true;
     error = null;
     try {
-      progress = await post(`/api/runs/${run.run_id}/start`, {
+      await post(`/api/runs/${run.run_id}/start`, {
         shelf_rows: shelfRows, shelf_cols: shelfCols, counters,
         target_wait_s: targetWait, backend: backend || null,
         door_line: hasOverhead ? door : null,
+        zones: hasOverhead && zones.length ? zones : null,
+        live: liveMode,
       });
-      step = 3;
-      poll = setInterval(watch, 700);
+      ondone?.(run.run_id);          // the dashboard is where you watch it
     } catch (e) {
       error = e.message;
     } finally {
@@ -71,22 +77,8 @@
     }
   }
 
-  async function watch() {
-    try {
-      progress = await get(`/api/runs/${run.run_id}`);
-    } catch (e) {
-      return;                          // a dropped poll is not a failed run
-    }
-    if (progress.state === 'done' || progress.state === 'error') {
-      clearInterval(poll);
-      poll = null;
-      if (progress.state === 'done') ondone?.(run.run_id);
-      else error = progress.error;
-    }
-  }
-
-  // ---- the draggable door line ----
-  let dragging = null;
+  // ---- dragging: the door ends and the zone rectangles ----
+  let dragging = $state(null);      // {kind: 'door'|'move'|'size', i, dx, dy}
 
   function svgPoint(evt, svg) {
     const p = svg.createSVGPoint();
@@ -96,12 +88,33 @@
     return [Math.max(0, Math.min(639, Math.round(x))), Math.max(0, Math.min(479, Math.round(y)))];
   }
 
+  function grab(kind, i, e) {
+    const [x, y] = svgPoint(e, e.currentTarget.ownerSVGElement);
+    const z = zones[i];
+    dragging = { kind, i, dx: z ? x - z.x : 0, dy: z ? y - z.y : 0 };
+  }
+
   function onMove(e) {
     if (dragging === null) return;
-    const next = [...door];
-    next[dragging] = svgPoint(e, e.currentTarget);
-    door = next;
+    const [x, y] = svgPoint(e, e.currentTarget);
+    if (dragging.kind === 'door') {
+      const next = [...door];
+      next[dragging.i] = [x, y];
+      door = next;
+    } else if (dragging.kind === 'move') {
+      const z = zones[dragging.i];
+      z.x = Math.max(0, Math.min(640 - z.w, x - dragging.dx));
+      z.y = Math.max(0, Math.min(480 - z.h, y - dragging.dy));
+    } else {
+      const z = zones[dragging.i];
+      z.w = Math.max(24, Math.min(640 - z.x, x - z.x));
+      z.h = Math.max(24, Math.min(480 - z.y, y - z.y));
+    }
   }
+
+  const addZone = () => (zones = [...zones,
+    { id: `zone_${zones.length + 1}`, x: 220, y: 200, w: 200, h: 120 }]);
+  const dropZone = (i) => (zones = zones.filter((_, j) => j !== i));
 
   const shelfBoxes = $derived.by(() => {
     // Mirrors tools/autoconfig.rois(), drawn at 640x480 instead of PL scale.
@@ -118,7 +131,7 @@
 
 <div class="wizard">
   <div class="wiz-steps">
-    {#each ['Clips', 'Check the view', 'Process'] as label, i}
+    {#each ['Clips', 'Check the view'] as label, i}
       <div class="wiz-step" class:active={step === i + 1} class:done={step > i + 1}>
         <span class="wiz-num">{step > i + 1 ? '✓' : i + 1}</span>{label}
       </div>
@@ -184,23 +197,48 @@
       {#if hasOverhead}
         <div class="card">
           <div class="card-header">
-            <span class="card-title">Entry line</span>
-            <span class="hint">drag the ends onto the doorway</span>
+            <span class="card-title">Floor map</span>
+            <span class="hint">drag the line onto the doorway, the boxes onto the aisles</span>
           </div>
           <div class="preview">
             <img src={url(`/api/runs/${run.run_id}/preview?role=overhead`)} alt="first overhead frame" />
-            <svg viewBox="0 0 640 480" role="group" aria-label="entry line" onpointermove={onMove}
+            <svg viewBox="0 0 640 480" role="group" aria-label="floor map" onpointermove={onMove}
                  onpointerup={() => (dragging = null)} onpointerleave={() => (dragging = null)}>
+              {#each zones as z, i}
+                <rect x={z.x} y={z.y} width={z.w} height={z.h} role="button" tabindex="0"
+                      aria-label="zone {z.id}" fill="rgba(37,99,235,0.10)"
+                      stroke="var(--accent-blue)" stroke-width="2"
+                      onpointerdown={(e) => grab('move', i, e)} style="cursor: move" />
+                <text x={z.x + 6} y={z.y + 18} fill="var(--accent-blue)" font-size="15"
+                      font-weight="700" pointer-events="none">{z.id}</text>
+                <rect x={z.x + z.w - 14} y={z.y + z.h - 14} width="14" height="14"
+                      role="button" tabindex="0" aria-label="resize {z.id}"
+                      fill="var(--accent-blue)"
+                      onpointerdown={(e) => grab('size', i, e)} style="cursor: nwse-resize" />
+              {/each}
               <line x1={door[0][0]} y1={door[0][1]} x2={door[1][0]} y2={door[1][1]}
-                    stroke="var(--accent-cyan)" stroke-width="4" />
+                    stroke="var(--accent-red)" stroke-width="4" />
               {#each door as p, i}
-                <circle cx={p[0]} cy={p[1]} r="12" fill="var(--accent-cyan)" role="button"
+                <circle cx={p[0]} cy={p[1]} r="12" fill="var(--accent-red)" role="button"
                         tabindex="0" aria-label="entry line end {i + 1}"
-                        onpointerdown={() => (dragging = i)} style="cursor: grab" />
+                        onpointerdown={(e) => grab('door', i, e)} style="cursor: grab" />
               {/each}
             </svg>
           </div>
-          <p class="hint">Anyone crossing it counts as an entry or an exit. Nothing else is stored.</p>
+          <div class="zone-rows">
+            {#each zones as z, i}
+              <div class="zone-row">
+                <span class="swatch"></span>
+                <input bind:value={zones[i].id} aria-label="zone name" />
+                <button class="link" onclick={() => dropZone(i)}>remove</button>
+              </div>
+            {/each}
+            <button class="link" onclick={addZone}>+ add zone</button>
+          </div>
+          <p class="hint">
+            Red line: crossing it counts as an entry or an exit. Blue boxes: the zones
+            dwell, the heatmap and conversion are reported against. No frame is stored.
+          </p>
         </div>
       {/if}
 
@@ -232,6 +270,12 @@
         <div class="wiz-fields">
           <label>Checkout counters <input type="number" min="1" max="8" bind:value={counters} /></label>
           <label>Target wait (s) <input type="number" min="30" step="30" bind:value={targetWait} /></label>
+          <label>Pace
+            <select bind:value={liveMode}>
+              <option value={true}>Camera speed — watch it happen</option>
+              <option value={false}>As fast as the box can</option>
+            </select>
+          </label>
           <label>Detector
             <select bind:value={backend}>
               <option value="">Auto (YOLO if this box has it)</option>
@@ -242,30 +286,12 @@
         </div>
         <div class="wiz-actions">
           <button class="link" onclick={() => (step = 1)}>Back</button>
-          <button class="btn" disabled={busy} onclick={start}>Process</button>
+          <button class="btn" disabled={busy} onclick={start}>Start</button>
         </div>
       </div>
     </div>
   {/if}
 
-  <!-- ── 3. processing ── -->
-  {#if step === 3}
-    <div class="card">
-      <div class="card-header">
-        <span class="card-title">Processing</span>
-        <span class="badge badge-backend">{progress?.backend ?? '…'}</span>
-      </div>
-      <div class="stat-value cyan">{pct === null ? '…' : pct.toFixed(0) + '%'}</div>
-      <div class="stat-label">
-        {progress?.processed ?? 0} frames{progress?.total ? ` of ${progress.total}` : ''}
-        · {progress?.fps ?? 0} fps
-      </div>
-      <div class="bar"><div class="bar-fill" style="width: {pct ?? 5}%"></div></div>
-      <p class="hint">
-        Inference runs on this box. The clips never leave it, and no frame is written to disk.
-      </p>
-    </div>
-  {/if}
 </div>
 
 <style>
@@ -295,6 +321,11 @@
   .wiz-fields { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; }
   .wiz-fields label { display: flex; flex-direction: column; gap: 5px; font-size: 12px;
                       color: var(--text-muted); }
+  .zone-rows { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+               margin-top: 12px; }
+  .zone-row { display: flex; align-items: center; gap: 6px; }
+  .zone-row input { width: 110px; }
+  .swatch { width: 10px; height: 10px; background: var(--accent-blue); }
   input, select { background: var(--bg-elevated); border: 1px solid var(--border);
                   color: var(--text-primary); border-radius: var(--radius-sm);
                   padding: 7px 10px; font-family: var(--font-mono); font-size: 13px; }

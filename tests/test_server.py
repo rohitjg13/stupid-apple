@@ -95,7 +95,7 @@ def test_full_pass_populates_the_dashboard(client, clip):
     run = upload(client, clip, roles=("overhead", "shelf"), n=2)
     rid = run["run_id"]
     started = client.post(f"/api/runs/{rid}/start",
-                          json={"backend": "reference", "shelf_rows": 2,
+                          json={"backend": "reference", "shelf_rows": 2, "live": False,
                                 "shelf_cols": 3, "door_line": [[0, 300], [639, 300]]})
     assert started.status_code == 200, started.text
     assert started.json()["backend"] == "reference"
@@ -119,6 +119,34 @@ def test_full_pass_populates_the_dashboard(client, clip):
                                                  "Purchased"]
     assert d["queue"], "queue estimates should exist for both lanes"
     assert d["t1"] > d["t0"]
+
+
+def test_camera_pace_is_the_default(client, clip):
+    """The demo watches the store fill up; a progress bar is the fallback."""
+    run = upload(client, clip)
+    started = client.post(f"/api/runs/{run['run_id']}/start",
+                          json={"backend": "reference"}).json()
+    assert started["live"] is True
+    client.server.runs[run["run_id"]]["state"] = "cancelled"   # let the thread wind down
+
+
+def test_zones_drawn_in_the_wizard_reach_the_clipset(client, clip):
+    from core.config import load_clipset
+    run = upload(client, clip)
+    client.post(f"/api/runs/{run['run_id']}/start",
+                json={"backend": "reference", "live": False,
+                      "zones": [{"id": "till", "x": 320, "y": 360, "w": 300, "h": 100},
+                                {"id": "door", "x": 0, "y": 380, "w": 200, "h": 100}]})
+    cfg = load_clipset(client.server.runs[run["run_id"]]["clipset"])
+    assert [z["id"] for z in cfg.zones] == ["till", "door"]
+    assert len(cfg.zones[0]["polygon"]) == 4
+
+
+def test_the_live_view_needs_a_running_run(client, clip):
+    run = upload(client, clip)
+    r = client.get(f"/api/runs/{run['run_id']}/live.mjpg")
+    assert r.status_code == 200          # an empty stream, not an error
+    assert r.headers["content-type"].startswith("multipart/x-mixed-replace")
 
 
 def test_dashboard_with_no_runs_at_all_is_empty(client):

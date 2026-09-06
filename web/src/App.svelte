@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import Wizard from './lib/Wizard.svelte';
-  import { del, get } from './lib/api.js';
+  import { del, get, url } from './lib/api.js';
 
   // ─── Reactive state ───
   let currentTime = $state('');
@@ -18,6 +18,7 @@
   let error = $state(null);
 
   const POLL_MS = 2000;
+  const LIVE_POLL_MS = 1000;      // a run in flight is worth watching closely
 
   async function refresh() {
     try {
@@ -68,7 +69,17 @@
       view = d?.run_id ? 'dashboard' : 'wizard';
     });
 
-    const dataInterval = setInterval(() => view === 'dashboard' && refresh(), POLL_MS);
+    let dataInterval = setInterval(tick, POLL_MS);
+    let period = POLL_MS;
+    function tick() {
+      if (view === 'dashboard') refresh();
+      const want = running ? LIVE_POLL_MS : POLL_MS;
+      if (want !== period) {
+        period = want;
+        clearInterval(dataInterval);
+        dataInterval = setInterval(tick, period);
+      }
+    }
     return () => { clearInterval(clockInterval); clearInterval(dataInterval); };
   });
 
@@ -90,6 +101,7 @@
   let targetWait = $derived(d?.target_wait_s ?? 180);
   let counters = $derived(d?.counters ?? 2);
   let running = $derived(d?.state === 'running');
+  let liveStream = $state('overhead');
 
   let footfallSpark = $derived(d?.footfall_spark ?? new Array(12).fill(0));
   let hourlyFootfall = $derived((d?.footfall_hourly ?? []).map((h) => ({ h: String(h.hour), v: h.entries })));
@@ -103,6 +115,7 @@
   })));
   let heatmapData = $derived(d?.heatmap ?? new Array(192).fill(0));
   let funnel = $derived(d?.funnel ?? []);
+  let zoneLabels = $derived(d?.zone_labels ?? []);
   let stockouts = $derived((d?.stockouts ?? []).map((s) => ({
     facing: s.facing, sku: s.sku, status: s.status,
     duration: s.status === 'active' ? fmtDuration(s.duration_s) : '—',
@@ -385,9 +398,9 @@
         {/each}
       </div>
       <div class="heatmap-zones">
-        <span class="heatmap-zone-label" style="left: 35%; bottom: 4%;">Entrance</span>
-        <span class="heatmap-zone-label" style="left: 15%; top: 32%;">Aisle 2</span>
-        <span class="heatmap-zone-label" style="right: 8%; top: 15%;">Checkout</span>
+        {#each zoneLabels as z}
+          <span class="heatmap-zone-label" style="left: {z.left}%; top: {z.top}%;">{z.name}</span>
+        {/each}
       </div>
     </div>
     <div style="margin-top: 8px; display: flex; justify-content: space-between; font-size: 10px; color: var(--text-dim);">
@@ -489,6 +502,28 @@
     </div>
   </div>
 
+  <div class="card span-2" id="panel-live">
+    <div class="card-header">
+      <span class="card-title">Live View</span>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <button class="nav-tab" class:active={liveStream === 'overhead'}
+                onclick={() => liveStream = 'overhead'}>Overhead</button>
+        <button class="nav-tab" class:active={liveStream === 'shelf'}
+                onclick={() => liveStream = 'shelf'}>Shelf</button>
+      </div>
+    </div>
+    {#if running}
+      <img class="live-frame" alt="frame being processed"
+           src={url(`/api/runs/${runId}/live.mjpg?stream=${liveStream}`)} />
+      <div style="margin-top: 8px; font-size: 11px; color: var(--text-dim);">
+        {d?.processed ?? 0}{d?.total ? ` / ${d.total}` : ''} frames · {d?.fps ?? 0} fps ·
+        boxes are detections, never identities. No frame is written to disk.
+      </div>
+    {:else}
+      <div class="live-idle">Idle — start a run to watch the pipeline work.</div>
+    {/if}
+  </div>
+
   <div class="card" id="panel-privacy">
     <div class="card-header">
       <span class="card-title">Privacy & DPDP</span>
@@ -534,6 +569,11 @@
     background: #fee2e2; color: var(--accent-red); border: 1px solid #fecaca;
   }
   .page-note { margin: 40px; color: var(--text-muted); }
+  .live-frame { width: 100%; display: block; background: #0f172a; }
+  .live-idle {
+    aspect-ratio: 4 / 3; display: grid; place-items: center;
+    background: var(--bg-elevated); color: var(--text-dim); font-size: 13px;
+  }
   .text-btn {
     background: none; border: none; color: var(--text-dim); cursor: pointer;
     font-size: 11px; text-decoration: underline; padding: 0;

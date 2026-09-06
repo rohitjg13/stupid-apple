@@ -73,34 +73,40 @@ class DB:
         # to the thread that made them.
         self._conn = self._connect()
         self._error = None
-        batch = []
+        batch, batch_at = [], time.monotonic()
         while not self._stop.is_set():
             try:
                 kind, payload = self._q.get(timeout=self.batch_interval_s)
             except queue.Empty:
                 self._commit(batch)      # periodic flush even when idle
-                batch = []
+                batch, batch_at = [], time.monotonic()
                 continue
             try:
                 if kind == "sql":
                     batch.append(payload)
-                    if len(batch) >= self.batch_size:
+                    # Age as well as size. A running pipeline publishes a dozen
+                    # events a second, so the queue is never empty for a whole
+                    # interval and size alone held a batch open for a minute:
+                    # the dashboard showed nothing until the run ended, and a
+                    # power pull lost 500 rows instead of one second's worth.
+                    if (len(batch) >= self.batch_size
+                            or time.monotonic() - batch_at >= self.batch_interval_s):
                         self._commit(batch)
-                        batch = []
+                        batch, batch_at = [], time.monotonic()
                 elif kind == "call":
                     self._commit(batch)
-                    batch = []
+                    batch, batch_at = [], time.monotonic()
                     payload(self._conn)     # atomic maintenance op in the writer
                     self._conn.commit()
                 else:
                     self._commit(batch)
-                    batch = []
+                    batch, batch_at = [], time.monotonic()
                     if isinstance(payload, threading.Event):
                         payload.set()
             except Exception as e:
                 # One bad item must not kill the sink for the whole pipeline.
                 self._conn.rollback()
-                batch = []
+                batch, batch_at = [], time.monotonic()
                 if self._error is None:
                     self._error = e
                 log.exception("db writer error")

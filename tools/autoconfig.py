@@ -57,6 +57,28 @@ def homography(floor=FLOOR):
                      [0.0, 0.0, 1.0]])
 
 
+def zones_from_rects(rects, floor=FLOOR):
+    """Rectangles drawn on the 640x480 overhead frame -> floor polygons.
+
+    The wizard works in pixels because that is what the operator can see; zones
+    are stored in metres because that is what dwell, heatmaps and conversion
+    are computed in. `homography()` is the bridge, so the two stay consistent
+    even after somebody calibrates a real one.
+    """
+    from geometry.homography import image_to_floor
+    H = homography(floor)
+    out = []
+    for i, r in enumerate(rects):
+        x, y, w, h = (float(r[k]) for k in ("x", "y", "w", "h"))
+        if w <= 0 or h <= 0:
+            raise ValueError(f"zone {r.get('id', i)} has no area: {w}x{h}")
+        corners = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
+        poly = [[round(float(X), 3), round(float(Y), 3)]
+                for X, Y in image_to_floor(H, corners)]
+        out.append({"id": str(r.get("id") or f"zone_{i + 1}"), "polygon": poly})
+    return out
+
+
 def zones(floor=FLOOR):
     w, h = floor
 
@@ -135,12 +157,15 @@ def planogram(roi_list, unit_price=50, sales_per_hour=5):
 
 def make_clipset(dest, overhead=(), shelf=(), store_id="demo-01", shelf_grid=(2, 3),
                  door_line=None, floor=FLOOR, counters=2, target_wait_s=180,
-                 lane_grid=(2, 8)):
+                 lane_grid=(2, 8), zone_rects=None):
     """Write a complete clipset folder and return its path.
 
     `overhead` and `shelf` are lists of video paths; several play back to back
     (sources/file.py reads `paths`). An empty `shelf` binds the shelf stream to
     the USB camera instead, which is the live demo.
+
+    `zone_rects` are the zones the operator drew on the overhead frame, in
+    full-res pixels; without them the default five-zone floor is used.
     """
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
@@ -166,7 +191,8 @@ def make_clipset(dest, overhead=(), shelf=(), store_id="demo-01", shelf_grid=(2,
 
     roi_list = rois(*shelf_grid)
     (dest / "store.yaml").write_text(yaml.safe_dump(store, sort_keys=False))
-    _write(dest / "zones.json", zones(floor))
+    _write(dest / "zones.json",
+           zones_from_rects(zone_rects, floor) if zone_rects else zones(floor))
     _write(dest / "tripwires.json", tripwires(door_line))
     _write(dest / "rois.json", roi_list)
     _write(dest / "lanes.json", lanes(*lane_grid))

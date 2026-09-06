@@ -123,3 +123,18 @@ def test_one_bad_statement_does_not_discard_the_batch(tmp_path):
     assert db.query_one("SELECT COUNT(*) AS n FROM occupancy")["n"] == 2   # ...not hidden
     assert db.dropped == 1
     db.close()
+
+
+def test_a_steady_stream_commits_on_time_not_only_when_it_stops(tmp_path):
+    """The queue never goes idle while a pipeline runs, so age has to flush it."""
+    db = DB(tmp_path / "r.db", batch_interval_s=0.05, batch_size=10_000)
+    deadline = time.monotonic() + 0.6
+    i = 0
+    while time.monotonic() < deadline:
+        db.insert("occupancy", {"run_id": "r1", "t": float(i), "count": i})
+        i += 1
+        time.sleep(0.005)                # busier than the interval, never empty
+    landed = db.query_one("SELECT COUNT(*) AS n FROM occupancy")["n"]
+    db.close()
+    assert landed > 0, "nothing was readable until the writer was closed"
+    assert landed >= i // 2

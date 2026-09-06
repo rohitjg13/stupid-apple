@@ -135,3 +135,19 @@ def test_camera_gives_up_loudly_after_repeated_failures(monkeypatch):
     with pytest.raises(RuntimeError, match="camera"):
         list(src.frames())
     src.close()
+
+
+def test_file_timestamps_follow_the_clip_not_the_wall_clock(tmp_path):
+    """Process an hour in three minutes and the dwells are still hour-long."""
+    clip = make_clip(tmp_path / "c.avi", n=30)
+    fast = list(FileSource(cfg_with(tmp_path, clip), "overhead", realtime=False).frames())
+    span = (fast[-1].t_ns - fast[0].t_ns) / 1e9
+    assert span == pytest.approx(29 / 15.0, abs=1e-6)      # 30 frames at 15 fps
+
+
+def test_the_clip_clock_is_the_same_at_either_speed(tmp_path):
+    clip = make_clip(tmp_path / "c.avi", n=10)
+    def offsets(realtime):
+        f = list(FileSource(cfg_with(tmp_path, clip), "overhead", realtime=realtime).frames())
+        return [round((x.t_ns - f[0].t_ns) / 1e9, 6) for x in f]
+    assert offsets(False) == offsets(True)

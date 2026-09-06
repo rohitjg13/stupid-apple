@@ -105,6 +105,32 @@ def draw_tracks(canvas, tracks, label_by_track):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, c, 2, cv2.LINE_AA)
 
 
+def draw_blobs(canvas, blobs, colour_bgr=(66, 135, 245)):
+    """Detections straight off a FrameResult, before any tracker has seen them.
+
+    The live view has no track ids -- and by design never will, ids are not
+    persisted -- so every box is the same colour with its foot point marked.
+    """
+    for b in blobs:
+        x, y, w, h = (int(b[k]) for k in ("x", "y", "w", "h"))
+        cv2.rectangle(canvas, (x, y), (x + w, y + h), colour_bgr, 2)
+        cv2.circle(canvas, (x + w // 2, y + h), 4, colour_bgr, -1)
+
+
+def draw_rois(canvas, rois, fills, empty_below=60, low_below=110, scale=2):
+    """Shelf facings, coloured by how full they read. ROIs are at PL scale."""
+    for i, r in enumerate(rois):
+        fill = int(fills[i]) if i < len(fills) else 0
+        c = ((60, 60, 220) if fill < r.get("empty_below", empty_below)
+             else (30, 150, 235) if fill < r.get("low_below", low_below)
+             else (80, 190, 80))
+        x, y = int(r["x"]) * scale, int(r["y"]) * scale
+        w, h = int(r["w"]) * scale, int(r["h"]) * scale
+        cv2.rectangle(canvas, (x, y), (x + w, y + h), c, 2)
+        cv2.putText(canvas, f'{r["id"]} {fill}', (x + 4, y + 16),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, c, 1, cv2.LINE_AA)
+
+
 def draw_banner(canvas, text):
     cv2.rectangle(canvas, (0, 0), (W, 24), (24, 24, 24), -1)
     cv2.putText(canvas, text, (8, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.5,

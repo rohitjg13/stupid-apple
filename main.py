@@ -34,16 +34,22 @@ class JsonLines(logging.Formatter):
         return json.dumps(out)
 
 
-def build_source(source, cfg, stream, seed=0):
+def build_source(source, cfg, stream, seed=0, realtime=True):
+    """`realtime` belongs to the source: it is the thing that owns the clock.
+
+    Every source paces its own `frames()`. The analytics loop used to sleep as
+    well, once per frame, for the whole inter-frame period of whichever stream
+    that frame came from -- so two streams played at half speed.
+    """
     if source == "sim":
         from sources.sim import SimSource
-        return SimSource(cfg, stream=stream, seed=seed)
+        return SimSource(cfg, stream=stream, seed=seed, realtime=realtime)
     if source == "file":
         from sources.file import FileSource
-        return FileSource(cfg, stream=stream)
+        return FileSource(cfg, stream=stream, realtime=realtime)
     if source == "camera":
         from sources.camera import CameraSource
-        return CameraSource(cfg, stream=stream)
+        return CameraSource(cfg, stream=stream, realtime=realtime)
     raise SystemExit(f"unknown --source {source!r}; expected sim, file or camera")
 
 
@@ -128,12 +134,16 @@ def write_health(path, payload):
 def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
         streams=("overhead", "shelf"), stop=None, clock=None, health_file=None,
         clock_state=None, seed=0, db_path=None, run_id=None,
-        on_progress=None):
+        on_progress=None, on_view=None):
     """`db_path` persists every event through backend/sink.py under `run_id`.
 
     `on_progress(processed, total)` is called about once a second of footage, so
     a caller driving this from a web request can show a bar. `total` is 0 when
     the source cannot say how long it is (a camera).
+
+    `on_view(frame)` is a viewfinder: the frame that was just processed, held
+    in memory for as long as it takes to draw it. Nothing here writes an image
+    anywhere, and the reference is dropped the moment the next frame arrives.
     """
     cfg = load_clipset(config)
     check_backend(backend)
@@ -141,7 +151,7 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
     stop = stop or threading.Event()      # per-run: run() must be re-callable in one process
 
     sources = {s: build_source(source if cfg.streams[s].get("source") != "sim" else "sim",
-                               cfg, s, seed=seed)
+                               cfg, s, seed=seed, realtime=realtime)
                for s in streams}
     # One backend instance per stream. pl/reference.py models the board's single
     # background model in BRAM and re-warms it whenever STREAM_ID changes, so a
@@ -224,6 +234,9 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
             if shelf_pipe is not None:
                 shelf_pipe.process_frame(t=t, result=frame.result, image=frame.image)
 
+        if on_view is not None:
+            on_view(frame)
+
         processed += 1
         if on_progress is not None and processed % 15 == 0:
             on_progress(processed, total)
@@ -235,8 +248,6 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
                                            source=source, streams=list(streams)))
         if frames and processed >= frames:
             break
-        if realtime:
-            time.sleep(max(0.0, 1.0 / max(sources[frame.stream].fps, 1) - 0.001))
 
     stop.set()
     shopper.close()

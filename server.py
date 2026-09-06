@@ -28,7 +28,8 @@ from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import (FileResponse, HTMLResponse, Response,
+                               StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 
 import main as runner
@@ -47,11 +48,13 @@ MAX_UPLOAD_BYTES = 2 * 1024**3          # 2 GB per clip; an SD card is not infin
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".mjpeg", ".mjpg", ".m4v", ".webm"}
 HEATMAP_W, HEATMAP_H = 16, 12           # the dashboard's grid, in cells
+HEATMAP_CELL_M = 0.25                   # geometry/zones.py's cell size
 STARTED = time.monotonic()
 
 db = DB(DATA / "retail.db")
 aggregates = Aggregates(db)
 runs = {}                               # run_id -> progress dict, this process only
+views = {}                              # run_id -> {stream: newest Frame}, never JSON
 app = FastAPI(title="Intelligent Retail Analytics")
 app.add_middleware(CORSMiddleware, allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
                    allow_methods=["*"], allow_headers=["*"])
@@ -147,6 +150,7 @@ def start(run_id: str, body: dict = Body(default={})):
             store_id=body.get("store_id") or "demo-01",
             shelf_grid=(int(body.get("shelf_rows", 2)), int(body.get("shelf_cols", 3))),
             door_line=body.get("door_line"),
+            zone_rects=body.get("zones"),
             counters=int(body.get("counters", 2)),
             target_wait_s=float(body.get("target_wait_s", 180)))
     except (ValueError, RuntimeError) as e:
@@ -156,29 +160,42 @@ def start(run_id: str, body: dict = Body(default={})):
     streams = tuple(s for s, clips in (("overhead", overhead), ("shelf", shelf)) if clips)
     if not streams:
         raise HTTPException(400, "upload at least one video")
+    # Camera pace by default: the point of the demo is watching the store fill
+    # up, not a progress bar. `live: false` processes as fast as the box can,
+    # which is what you want for an hour of footage you are not watching.
+    live = bool(body.get("live", True))
     run.update(state="running", processed=0, total=0, error=None, backend=backend,
-               clipset=str(clipset), started=time.time())
-    threading.Thread(target=_work, args=(run, str(clipset), backend, streams),
+               clipset=str(clipset), started=time.time(), live=live)
+    views[run_id] = {}
+    threading.Thread(target=_work, args=(run, str(clipset), backend, streams, live),
                      name=f"run-{run_id}", daemon=True).start()
     return run
 
 
-def _work(run, clipset, backend, streams):
+def _work(run, clipset, backend, streams, live=True):
     t0 = time.monotonic()
 
     def progress(processed, total):
         run.update(processed=processed, total=total,
                    fps=round(processed / max(time.monotonic() - t0, 1e-6), 1))
 
+    def view(frame):
+        # Newest frame per stream, overwritten in place. Never written to disk,
+        # and it goes when the run does -- this is a viewfinder, not a recording.
+        if frame.image is not None:
+            views.setdefault(run["run_id"], {})[frame.stream] = frame
+
     try:
-        runner.run(clipset, source="file", backend=backend, realtime=False,
+        runner.run(clipset, source="file", backend=backend, realtime=live,
                    streams=streams, db_path=str(DATA / "retail.db"),
-                   run_id=run["run_id"], on_progress=progress,
+                   run_id=run["run_id"], on_progress=progress, on_view=view,
                    clock_state=str(DATA / "clock.json"))
         run["state"] = "done"
     except Exception as e:                      # a bad clip must not kill the server
         log.exception("run failed", extra={"run_id": run["run_id"]})
         run.update(state="error", error=f"{type(e).__name__}: {e}")
+    finally:
+        views.pop(run["run_id"], None)
 
 
 @app.get("/api/runs")
@@ -209,11 +226,66 @@ def delete_run(run_id: str):
     db.drain()
     shutil.rmtree(DATA / "runs" / run_id, ignore_errors=True)
     runs.pop(run_id, None)
+    views.pop(run_id, None)
     return {"deleted": run_id}
 
 
 def _fail_unknown(run_id):
     raise HTTPException(404, f"unknown run {run_id!r}")
+
+
+# ---- the viewfinder -------------------------------------------------------
+def _annotate(frame, cfg):
+    """The frame the pipeline just saw, with what it found drawn on top.
+
+    Reuses tools/viz_tracks.py's drawing helpers so the live panel and the
+    offline report cannot drift apart.
+    """
+    import cv2
+    from tools.viz_tracks import draw_banner, draw_blobs, draw_rois, draw_wires, draw_zones
+
+    canvas = frame.image.copy()
+    if frame.stream == "overhead":
+        if cfg is not None:
+            draw_zones(canvas, cfg, "overhead")
+            draw_wires(canvas, [w for w in cfg.tripwires if w["stream"] == "overhead"])
+        draw_blobs(canvas, frame.blobs)
+        draw_banner(canvas, f"overhead  frame {frame.frame_id}  "
+                            f"{int(frame.result['num_blobs'])} detected")
+    else:
+        if cfg is not None:
+            draw_rois(canvas, cfg.rois, frame.result["roi_fill"])
+        draw_banner(canvas, f"shelf  frame {frame.frame_id}")
+    return canvas
+
+
+@app.get("/api/runs/{run_id}/live.mjpg")
+def live(run_id: str, stream: str = "overhead", fps: float = 8.0):
+    """MJPEG of the frame currently being processed. Nothing is kept."""
+    import cv2
+
+    run = runs.get(run_id) or _fail_unknown(run_id)
+    cfg = _config_of(run_id)
+    period = 1.0 / max(min(fps, 15.0), 1.0)
+
+    def frames():
+        last_id, idle = -1, 0.0
+        while run.get("state") == "running" and idle < 10.0:
+            frame = views.get(run_id, {}).get(stream)
+            if frame is None or frame.frame_id == last_id:
+                idle += period
+                time.sleep(period)
+                continue
+            last_id, idle = frame.frame_id, 0.0
+            ok, buf = cv2.imencode(".jpg", _annotate(frame, cfg),
+                                   [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if ok:
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                       + buf.tobytes() + b"\r\n")
+            time.sleep(period)
+
+    return StreamingResponse(frames(),
+                             media_type="multipart/x-mixed-replace; boundary=frame")
 
 
 # ---- the dashboard document ----------------------------------------------
@@ -241,25 +313,62 @@ def _state_of(fill, roi):
     return "partial" if fill < 180 else "full"
 
 
-def _heatmap_grid(tiles):
+def _floor_bounds(cfg, tiles):
+    """The heatmap's extent in 0.25 m cells.
+
+    The floor the operator drew, not the corner of it people happened to walk
+    in -- otherwise the grid rescales every time somebody enters, and the zone
+    labels drawn over it point at the wrong squares.
+    """
+    if cfg is not None and cfg.zones:
+        pts = [p for z in cfg.zones for p in z["polygon"]]
+        xs = [p[0] / HEATMAP_CELL_M for p in pts]
+        ys = [p[1] / HEATMAP_CELL_M for p in pts]
+    elif tiles:
+        xs = [t["gx"] for t in tiles]
+        ys = [t["gy"] for t in tiles]
+    else:
+        return 0.0, 1.0, 0.0, 1.0
+    return min(xs), max(max(xs), min(xs) + 1), min(ys), max(max(ys), min(ys) + 1)
+
+
+def _cell_of(gx, gy, bounds):
+    """A 0.25 m cell -> (column, row) of the dashboard grid, row 0 at the top."""
+    x0, x1, y0, y1 = bounds
+    cx = (gx - x0) / max(x1 - x0, 1e-9) * (HEATMAP_W - 1)
+    # Floor Y grows away from the camera; the grid's first row is the far end.
+    cy = (HEATMAP_H - 1) - (gy - y0) / max(y1 - y0, 1e-9) * (HEATMAP_H - 1)
+    return cx, cy
+
+
+def _heatmap_grid(tiles, bounds):
     """Absolute 0.25 m cells -> the dashboard's HEATMAP_W x HEATMAP_H, 0..1."""
     grid = [0.0] * (HEATMAP_W * HEATMAP_H)
-    if not tiles:
-        return grid
-    gxs = [t["gx"] for t in tiles] or [0]
-    gys = [t["gy"] for t in tiles] or [0]
-    span_x = max(max(gxs) - min(gxs) + 1, 1)
-    span_y = max(max(gys) - min(gys) + 1, 1)
     for t in tiles:
-        cx = int((t["gx"] - min(gxs)) / span_x * HEATMAP_W)
-        # Floor Y grows away from the camera; the grid's first row is the top.
-        cy = HEATMAP_H - 1 - int((t["gy"] - min(gys)) / span_y * HEATMAP_H)
-        i = min(HEATMAP_H - 1, max(0, cy)) * HEATMAP_W + min(HEATMAP_W - 1, max(0, cx))
-        grid[i] += t["count"]
+        cx, cy = _cell_of(t["gx"], t["gy"], bounds)
+        col = min(HEATMAP_W - 1, max(0, int(round(cx))))
+        row = min(HEATMAP_H - 1, max(0, int(round(cy))))
+        grid[row * HEATMAP_W + col] += t["count"]
     top = max(grid) or 1.0
     # sqrt, not linear: one aisle end always dominates a floor heatmap, and a
-    # linear scale renders everywhere else as the same near-black blue.
+    # linear scale renders everywhere else as the same flat pale blue.
     return [round((v / top) ** 0.5, 3) for v in grid]
+
+
+def _zone_labels(cfg, bounds):
+    """Where each zone's name sits over the heatmap, in percent."""
+    if cfg is None:
+        return []
+    out = []
+    for z in cfg.zones:
+        pts = z["polygon"]
+        gx = sum(p[0] for p in pts) / len(pts) / HEATMAP_CELL_M
+        gy = sum(p[1] for p in pts) / len(pts) / HEATMAP_CELL_M
+        cx, cy = _cell_of(gx, gy, bounds)
+        out.append({"name": z["id"],
+                    "left": round(min(92.0, max(2.0, cx / (HEATMAP_W - 1) * 100)), 1),
+                    "top": round(min(92.0, max(2.0, cy / (HEATMAP_H - 1) * 100)), 1)})
+    return out
 
 
 def _spark(t0, t1, run_id, buckets=12):
@@ -287,6 +396,8 @@ def dashboard(run_id: str = None):
     by_sku = {p["sku"]: p for p in plan}
     by_facing = {p["facing"]: p for p in plan}
 
+    tiles = aggregates.heatmap(t0, t1, run_id)
+    bounds = _floor_bounds(cfg, tiles)
     totals = aggregates.footfall_totals(run_id)
     # Per shopper, not per visit row: one person browsing three aisles is three
     # visits, and a funnel whose second step outnumbers its first is nonsense.
@@ -348,7 +459,9 @@ def dashboard(run_id: str = None):
         "replenishment": aggregates.replenishment_list(run_id, plan)[:5],
         "alerts": db.query("SELECT t, severity, rule, message FROM alert "
                            "WHERE run_id = ? ORDER BY t DESC LIMIT 12", (run_id,)),
-        "heatmap": _heatmap_grid(aggregates.heatmap(t0, t1, run_id)),
+        "heatmap": _heatmap_grid(tiles, bounds),
+        "zone_labels": _zone_labels(cfg, bounds),
+        "live": progress.get("live", False),
         "footfall_hourly": _hours_of_day(
             aggregates.footfall_by_hour(t1 or time.time(), run_id)),
         "system": _system(progress, cfg),

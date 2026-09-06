@@ -56,8 +56,16 @@ class FileSource(Source):
         return n
 
     def frames(self):
+        """`t_ns` is the clip's own clock, not the wall clock.
+
+        A file has a timeline of its own, and events have to sit on it: process
+        an hour of footage in three minutes and the dwells must still be the
+        dwells that happened, not a third of them. sources/sim.py already
+        stamps virtual time this way; realtime playback makes the two agree.
+        """
         dt = 1.0 / max(self.fps, 1e-6)
         frame_id = 0
+        t0_ns = time.monotonic_ns()
         next_t = time.monotonic()
         while not self._closed:
             ok, img = self._cap.read()
@@ -80,7 +88,7 @@ class FileSource(Source):
 
             r = np.zeros(1, dtype=FRAME_RESULT_DT)[0]
             r["frame_id"] = frame_id
-            yield Frame(self.stream, frame_id, time.monotonic_ns(), r,
+            yield Frame(self.stream, frame_id, t0_ns + int(frame_id * dt * 1e9), r,
                         image=letterbox(img) if self.decode else None)
             frame_id += 1
 

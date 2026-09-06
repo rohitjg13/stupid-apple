@@ -73,10 +73,12 @@ class _Walker:
 
 
 class SimSource(Source):
-    def __init__(self, cfg, stream="overhead", seed=0, arrivals_per_min=12.0, fps=None):
+    def __init__(self, cfg, stream="overhead", seed=0, arrivals_per_min=12.0, fps=None,
+                 realtime=False):
         if stream not in ("overhead", "shelf"):
             raise ValueError(f"unknown stream {stream!r}")
         self.cfg, self.stream, self.seed = cfg, stream, seed
+        self.realtime = realtime        # the demo fallback plays at store speed
         self.fps = float(fps or cfg.streams[stream].get("fps", 15))
         self.arrivals_per_min = arrivals_per_min
         self.rng = np.random.default_rng(seed)
@@ -136,6 +138,7 @@ class SimSource(Source):
         dt = 1.0 / self.fps
         t = 0.0
         t0_ns = time.monotonic_ns()
+        next_t = time.monotonic()
         for frame_id in range(1 << 32):
             if self._closed:
                 return
@@ -166,6 +169,9 @@ class SimSource(Source):
 
             yield Frame(self.stream, frame_id, t0_ns + int(t * 1e9), r, image=None)
             t += dt
+            if self.realtime:
+                next_t += dt
+                time.sleep(max(0.0, next_t - time.monotonic()))
 
     def close(self):
         self._closed = True
