@@ -6,7 +6,8 @@
 #   tools/try_video.sh vid/arcade1.mp4 --detector yolo --config config/mystore
 #
 # Writes out/<name>/ containing:
-#   tracked.mp4        annotated video
+#   tracked.mp4        annotated video with the dwell heatmap
+#   tracked_noheat.mp4 the same without it
 #   heatmap.png        4. dwell heatmap: green = walked through, red = stood still (also in the video)
 #   dwell.csv          3. per person: present, standing still, distance walked, region
 #   footfall.csv       2. people present / arrivals / departures per time bucket

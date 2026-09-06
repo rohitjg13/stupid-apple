@@ -6,7 +6,8 @@
 The report folder answers the four shopper-analytics questions, one file each,
 and is honest about which ones need a per-camera config:
 
-    tracked.mp4        annotated video: boxes, ids, dwell labels
+    tracked.mp4        annotated video with the dwell heatmap
+    tracked_noheat.mp4 the same video without it
     heatmap.png        4. dwell heatmap over a still: light green where people
                           walked, yellow -> red where they stood (full red = 10 s
                           standing, or 5 s for two people on the same spot)
@@ -409,7 +410,8 @@ def main(argv=None):
     ap.add_argument("--heat-full-s", type=float, default=10.0,
                     help="seconds of standing still that render as full red (two people "
                          "on one spot get there in half the time)")
-    ap.add_argument("--no-heat", action="store_true", help="leave the heatmap out of the video")
+    ap.add_argument("--no-heat", action="store_true",
+                    help="write only tracked_noheat.mp4 (both are written by default)")
     ap.add_argument("--no-open", action="store_true")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -487,7 +489,10 @@ def main(argv=None):
         return zmap.zone_of(*image_to_floor(Hm, tr.foot))
 
     heat_full = fps * a.heat_full_s
-    writer = cv2.VideoWriter(a.out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H))
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    plain_path = str(Path(a.out).with_name(Path(a.out).stem + "_noheat.mp4"))
+    writer = None if a.no_heat else cv2.VideoWriter(a.out, fourcc, fps, (W, H))
+    plain_writer = cv2.VideoWriter(plain_path, fourcc, fps, (W, H))
     shown = 0
     try:
         for frame in src.frames():
@@ -518,26 +523,35 @@ def main(argv=None):
                     label += f" {z}"
                 labels[tr.id] = label
 
-            if not a.no_heat:
-                canvas = draw_dwell_heat(canvas, rep.heat_visit, rep.heat_dwell, heat_full)
-            draw_zones(canvas, cfg, a.stream)
-            draw_wires(canvas, wires.wires)
-            draw_tracks(canvas, tracks, labels)
             banner = f"frame {frame.frame_id}  people {len(tracks)}"
             if wires.wires:
                 banner += f"  in {wires.counts['in']}  out {wires.counts['out']}"
             if not warm:
                 banner += "   [background warming up]"
-            draw_banner(canvas, banner)
-            writer.write(canvas)
+
+            def annotate(img):
+                draw_zones(img, cfg, a.stream)
+                draw_wires(img, wires.wires)
+                draw_tracks(img, tracks, labels)
+                draw_banner(img, banner)
+                return img
+
+            plain_writer.write(annotate(canvas.copy()))
+            if writer is not None:
+                writer.write(annotate(
+                    draw_dwell_heat(canvas, rep.heat_visit, rep.heat_dwell, heat_full)))
             shown += 1
     finally:
         src.close()
-        writer.release()
+        plain_writer.release()
+        if writer is not None:
+            writer.release()
 
     out_dir = write_report(rep, a.report, a.video or "sim", a.detector, cfg, a.stream,
                            heat_full_s=a.heat_full_s)
-    log.info("wrote %s (%d frames)", a.out, shown)
+    log.info("wrote %s (%d frames)", plain_path, shown)
+    if writer is not None:
+        log.info("wrote %s (with heatmap)", a.out)
     log.info("report in %s/", out_dir)
     log.info("%s", (out_dir / "summary.txt").read_text())
     return 0

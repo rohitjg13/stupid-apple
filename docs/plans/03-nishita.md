@@ -179,7 +179,7 @@ question -- and honest about which need a per-camera config:
 | `footfall.csv` | 2. footfall over time | people present, arrivals, departures per 10 s bucket | same, plus `mostly_in_zone` per person in `dwell.csv` |
 | `dwell.csv` | 3. dwell near products | per person: seconds present, seconds standing still, distance walked, image region | plus the named zone |
 | `heatmap.png` | 4. heatmap | **dwell heatmap** over a still: light green where people walked, yellow → red where they stood; full red = 10 s standing, or two people for 5 s | same, with zone outlines |
-| `tracked.mp4`, `summary.txt/.json` | | annotated video; headline numbers | |
+| `tracked.mp4`, `tracked_noheat.mp4`, `summary.txt/.json` | | annotated video with and without the heatmap; headline numbers | |
 
 "By day" is not a per-clip number: the backend aggregates `footfall_by_day`
 across runs. The heatmap is in the video too, on an **absolute** scale
