@@ -14,6 +14,8 @@
   let shelfRows = $state(2);
   let shelfCols = $state(3);
   let counters = $state(2);
+  let checkoutZone = $state('checkout');   // standing here is what counts as buying
+  let buyDwell = $state(5);
   let targetWait = $state(180);
   let backend = $state('');            // '' = let the box decide
   let door = $state([[0, 400], [639, 400]]);
@@ -88,6 +90,8 @@
         target_wait_s: targetWait, backend: backend || null,
         door_line: hasOverhead ? door : null,
         door_dir: hasOverhead ? doorDir : null,
+        checkout_zone: zones.some((z) => z.id === checkoutZone) ? checkoutZone : null,
+        buy_dwell_s: buyDwell,
         zones: hasOverhead && zones.length ? zones : null,
         live: liveMode,
       });
@@ -323,6 +327,14 @@
         <div class="card-header"><span class="card-title">Store</span></div>
         <div class="wiz-fields">
           <label>Checkout counters <input type="number" min="1" max="8" bind:value={counters} /></label>
+          <label>Checkout zone
+            <select bind:value={checkoutZone}>
+              {#each zones as z}<option value={z.id}>{z.id}</option>{/each}
+            </select>
+          </label>
+          <label>Counts as a sale after (s)
+            <input type="number" min="1" max="120" bind:value={buyDwell} />
+          </label>
           <label>Target wait (s) <input type="number" min="30" step="30" bind:value={targetWait} /></label>
           <label>Pace
             <select bind:value={liveMode}>

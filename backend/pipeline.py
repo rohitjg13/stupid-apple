@@ -11,11 +11,14 @@ that is what `staffing.staffing_advice` is used for below, once every
 `advice_period_s`, off the arrival rate measured from door tripwires.
 
 The POS is simulated and the deck has to say so. What it is *not* allowed to be
-is untethered: a transaction is a shopper leaving the checkout with something,
-so a simulated one follows an observed departure -- a lane's count dropping
-where the lanes are calibrated, otherwise a shopper crossing the door outbound,
-with probability `pos.conversion`. Sales on a timer sold to an empty shop and
-printed conversion rates over 100%.
+is invented: a transaction is somebody standing at the checkout long enough to
+pay for something. So one `visit` to the checkout zone lasting `buy_dwell_s`
+(5 s) is one sale, and nothing else emits `pos_txn`. Earlier versions sold on a
+timer and then on a coin flip at the door, which is how conversion managed to
+read 500%, then 100%: a rate whose numerator is made up is not a rate.
+
+`PosStub` still prices the basket, and still exposes `on_count` for the day the
+queue cells are calibrated well enough to time a real till.
 """
 from __future__ import annotations
 
@@ -52,11 +55,15 @@ class BackendPipeline:
         self.service_s = float(cfg.checkout.get("service_s", 45.0))
 
         self.pos = PosStub(cfg, seed=seed) if cfg.planogram else None
-        self.buy_rate = float(cfg.pos.get("conversion", 0.35))
-        self._lanes_live = False        # true once a lane cell ever reads busy
+        # Which zone the till is in, and how long somebody has to stand there
+        # for it to have been a purchase. Both come off the clipset because the
+        # operator names the zones in the wizard.
+        self.checkout_zone = cfg.pos.get("checkout_zone") or "checkout"
+        self.buy_dwell_s = float(cfg.pos.get("buy_dwell_s", 5.0))
         self.alerts = Alerts(cfg, bus)
         bus.subscribe("*", self.alerts.on_event)
         bus.subscribe("tripwire", self._on_tripwire)
+        bus.subscribe("visit", self._on_visit)
 
         self._count = {}                                # lane -> smoothed headcount
         self._arrivals = []                             # entry times, trimmed
@@ -67,12 +74,14 @@ class BackendPipeline:
     def _on_tripwire(self, event):
         if event.payload["dir"] == "in":
             self._arrivals.append(event.t)
-        elif (event.payload["dir"] == "out" and self.pos is not None
-              and not self._lanes_live and self.pos.rng.random() < self.buy_rate):
-            # Whoever just left either bought something or did not. With real
-            # lane cells the drop in `on_count` is the better signal and this
-            # stands down, so a departure is never counted twice.
-            self.bus.publish(self.pos.txn(event.t, lane=1))
+
+    def _on_visit(self, event):
+        """Long enough at the till to have paid for something."""
+        if self.pos is None or event.zone_id != self.checkout_zone:
+            return
+        p = event.payload
+        if p["t_exit"] - p["t_enter"] >= self.buy_dwell_s:
+            self.bus.publish(self.pos.txn(p["t_exit"], lane=1))
 
     def _lambda(self, t):
         """Entries per second over the last LAMBDA_WINDOW_S."""
@@ -98,15 +107,9 @@ class BackendPipeline:
 
             count = ema(self._count.get(lane), naive_count(cells))
             self._count[lane] = count
-            self._lanes_live = self._lanes_live or count > 0.5
             self._publish(t, "queue_estimate",
                           {"lane": lane, "count": round(count, 2),
                            "pred_wait_s": round(count * self.service_s, 1)})
-
-            if self.pos is not None:
-                txn = self.pos.on_count(t, lane, count)
-                if txn is not None:
-                    self.bus.publish(txn)
 
         self._advise(t)
 

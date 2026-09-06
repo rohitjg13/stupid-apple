@@ -167,7 +167,8 @@ def planogram(roi_list, unit_price=50, sales_per_hour=5):
 
 def make_clipset(dest, overhead=(), shelf=(), store_id="demo-01", shelf_grid=(2, 3),
                  door_line=None, floor=FLOOR, counters=2, target_wait_s=180,
-                 lane_grid=(2, 8), zone_rects=None, door_dir=None):
+                 lane_grid=(2, 8), zone_rects=None, door_dir=None,
+                 checkout_zone=None, buy_dwell_s=5.0):
     """Write a complete clipset folder and return its path.
 
     `overhead` and `shelf` are lists of video paths; several play back to back
@@ -176,6 +177,8 @@ def make_clipset(dest, overhead=(), shelf=(), store_id="demo-01", shelf_grid=(2,
 
     `zone_rects` are the zones the operator drew on the overhead frame, in
     full-res pixels; without them the default five-zone floor is used.
+    `checkout_zone` names the one with the till in it: standing there for
+    `buy_dwell_s` is what the POS stub counts as a sale.
     """
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
@@ -195,14 +198,22 @@ def make_clipset(dest, overhead=(), shelf=(), store_id="demo-01", shelf_grid=(2,
         streams["shelf"] = {"source": "camera", "device": "/dev/video0",
                             "fourcc": "YUYV", "fps": 5}
 
+    zone_list = zones_from_rects(zone_rects, floor) if zone_rects else zones(floor)
+    ids = [z["id"] for z in zone_list]
+    if checkout_zone is None:
+        checkout_zone = "checkout" if "checkout" in ids else (ids[0] if ids else None)
+    elif checkout_zone not in ids:
+        raise ValueError(f"checkout zone {checkout_zone!r} is not one of {ids}")
+
     store = {"store_id": store_id, "streams": streams,
              "checkout": {"counters": counters, "target_wait_s": target_wait_s},
-             "pos": {"source": "stub"}, "cloud": {"enabled": False, "url": None}}
+             "pos": {"source": "stub", "checkout_zone": checkout_zone,
+                     "buy_dwell_s": float(buy_dwell_s)},
+             "cloud": {"enabled": False, "url": None}}
 
     roi_list = rois(*shelf_grid)
     (dest / "store.yaml").write_text(yaml.safe_dump(store, sort_keys=False))
-    _write(dest / "zones.json",
-           zones_from_rects(zone_rects, floor) if zone_rects else zones(floor))
+    _write(dest / "zones.json", zone_list)
     _write(dest / "tripwires.json", tripwires(door_line, door_dir))
     _write(dest / "rois.json", roi_list)
     _write(dest / "lanes.json", lanes(*lane_grid))

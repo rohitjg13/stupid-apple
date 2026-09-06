@@ -113,41 +113,62 @@ def test_an_empty_store_sells_nothing():
     assert not got.of("pos_txn")
 
 
-def _exit(t):
-    return Event(t, CFG.store_id, "overhead", "door", "tripwire",
-                 {"dir": "out", "tripwire_id": "door"})
+def _visit(t_enter, t_exit, zone="checkout", track_id=1):
+    return Event(t_exit, CFG.store_id, "overhead", zone, "visit",
+                 {"track_id": track_id, "t_enter": t_enter, "t_exit": t_exit})
 
 
-def test_sales_follow_departures_and_never_outnumber_them():
-    """Conversion is txns/footfall; txns above footfall is a broken metric."""
+def test_standing_at_the_checkout_long_enough_is_a_sale():
     bus = Bus()
     got = Collector(bus)
-    pipe = BackendPipeline(CFG, bus)
-    for i in range(40):
-        bus.publish(_exit(1000.0 + i))
+    BackendPipeline(CFG, bus)
+    bus.publish(_visit(1000.0, 1009.0))             # nine seconds at the till
     bus.drain()
 
-    txns = got.of("pos_txn")
-    assert 0 < len(txns) < 40, "a departure buys something sometimes, not always"
+    assert len(got.of("pos_txn")) == 1
 
 
-def test_nobody_leaving_means_nothing_sold():
+def test_walking_past_the_checkout_is_not():
     bus = Bus()
     got = Collector(bus)
-    drive(bus, BackendPipeline(CFG, bus), [0] * 8, n=40, dt=10.0)
+    BackendPipeline(CFG, bus)
+    bus.publish(_visit(1000.0, 1003.0))             # three seconds, still browsing
+    bus.drain()
 
     assert not got.of("pos_txn")
 
 
-def test_calibrated_lanes_take_over_from_the_door():
-    """With real queue cells the lane drop is the signal; the door stands down."""
+def test_dwelling_anywhere_else_is_not_a_sale():
     bus = Bus()
     got = Collector(bus)
-    pipe = BackendPipeline(CFG, bus)
-    drive(bus, pipe, [95] * 8, n=4)                 # lanes read busy
-    assert pipe._lanes_live
-    for i in range(40):
-        bus.publish(_exit(2000.0 + i))
+    BackendPipeline(CFG, bus)
+    bus.publish(_visit(1000.0, 1600.0, zone="aisle_a"))
     bus.drain()
 
-    assert not [e for e in got.of("pos_txn") if e.t >= 2000.0]
+    assert not got.of("pos_txn")
+
+
+def test_sales_never_outnumber_the_shoppers_who_made_them():
+    """Conversion is sales/footfall; a made-up numerator is how it read 500%."""
+    bus = Bus()
+    got = Collector(bus)
+    BackendPipeline(CFG, bus)
+    for i in range(6):
+        bus.publish(_visit(1000.0 + i * 20, 1010.0 + i * 20, track_id=i))
+    drive(bus, BackendPipeline(CFG, bus), [0] * 8, n=40, dt=10.0)
+
+    assert len(got.of("pos_txn")) == 6              # one each, not one per tick
+
+
+def test_the_till_zone_and_the_threshold_come_from_the_clipset():
+    cfg = replace(CFG, pos={"source": "stub", "checkout_zone": "aisle_b",
+                            "buy_dwell_s": 30.0})
+    bus = Bus()
+    got = Collector(bus)
+    BackendPipeline(cfg, bus)
+    bus.publish(_visit(1000.0, 1010.0, zone="aisle_b"))      # under 30 s
+    bus.publish(_visit(2000.0, 2040.0, zone="aisle_b"))      # over
+    bus.publish(_visit(3000.0, 3040.0, zone="checkout"))     # wrong zone
+    bus.drain()
+
+    assert len(got.of("pos_txn")) == 1

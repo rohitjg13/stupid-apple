@@ -151,6 +151,8 @@ def start(run_id: str, body: dict = Body(default={})):
             shelf_grid=(int(body.get("shelf_rows", 2)), int(body.get("shelf_cols", 3))),
             door_line=body.get("door_line"),
             door_dir=body.get("door_dir"),
+            checkout_zone=body.get("checkout_zone"),
+            buy_dwell_s=float(body.get("buy_dwell_s", 5)),
             zone_rects=body.get("zones"),
             counters=int(body.get("counters", 2)),
             target_wait_s=float(body.get("target_wait_s", 180)))
