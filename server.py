@@ -26,7 +26,8 @@ import uuid
 from functools import lru_cache
 from pathlib import Path
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import (Body, FastAPI, File, Form, HTTPException, Request,
+                     UploadFile)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (FileResponse, HTMLResponse, Response,
                                StreamingResponse)
@@ -291,6 +292,66 @@ def live(run_id: str, stream: str = "overhead", fps: float = 8.0):
                              media_type="multipart/x-mixed-replace; boundary=frame")
 
 
+def _ranged(path: Path, request):
+    """FileResponse answers a Range request with the whole file and a 200.
+
+    A browser <video> asks for ranges; given a 200 it cannot seek, and on a
+    long clip some builds will not start playing at all. So serve 206s.
+    """
+    import mimetypes
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    header = (request.headers.get("range") or "").strip().lower()
+    if not header.startswith("bytes="):
+        return FileResponse(path, media_type=media_type,
+                            headers={"accept-ranges": "bytes"})
+
+    size = path.stat().st_size
+    first, _, last = header[len("bytes="):].partition("-")
+    try:
+        start = int(first) if first else 0
+        end = int(last) if last else size - 1
+    except ValueError:
+        raise HTTPException(416, "bad range")
+    end = min(end, size - 1)
+    if start > end or start >= size:
+        raise HTTPException(416, "range outside the file")
+
+    def chunks():
+        with path.open("rb") as fh:
+            fh.seek(start)
+            left = end - start + 1
+            while left > 0:
+                buf = fh.read(min(1 << 20, left))
+                if not buf:
+                    return
+                left -= len(buf)
+                yield buf
+
+    return StreamingResponse(chunks(), status_code=206, media_type=media_type,
+                             headers={"content-range": f"bytes {start}-{end}/{size}",
+                                      "accept-ranges": "bytes",
+                                      "content-length": str(end - start + 1)})
+
+
+@app.get("/api/runs/{run_id}/video")
+def video(request: Request, run_id: str, stream: str = "overhead"):
+    """The uploaded clip itself, for the panel to loop when nothing is running.
+
+    Resolved through the clipset rather than the in-memory run, so it survives
+    a restart. Only a path the clipset points at, under this run's own media
+    folder, is ever served.
+    """
+    cfg = _config_of(run_id)
+    spec = (cfg.streams.get(stream) if cfg else None) or {}
+    paths = spec.get("paths") or ([spec["path"]] if spec.get("path") else [])
+    media = (DATA / "runs" / run_id / "media").resolve()
+    for candidate in paths:
+        path = Path(candidate).resolve()
+        if path.is_file() and media in path.parents:
+            return _ranged(path, request)
+    raise HTTPException(404, f"no {stream} clip for this run")
+
+
 # ---- the dashboard document ----------------------------------------------
 @lru_cache(maxsize=32)
 def _clipset(path):
@@ -450,6 +511,8 @@ def dashboard(run_id: str = None):
         "total": progress.get("total", 0),
         "fps": progress.get("fps", 0.0),
         "backend": progress.get("backend") or "reference",
+        "clips": [s for s in ("overhead", "shelf")
+                  if cfg and (cfg.streams.get(s) or {}).get("source") == "file"],
         "store_id": cfg.store_id if cfg else None,
         "target_wait_s": checkout.get("target_wait_s", 180),
         "counters": checkout.get("counters", 2),

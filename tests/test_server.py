@@ -192,3 +192,51 @@ def test_the_dashboard_page_is_served(client):
 def test_unknown_paths_fall_through_to_the_spa(client):
     r = client.get("/anything")
     assert r.status_code in (200, 503)          # never a 404 for a client-side route
+
+
+def test_the_clip_is_served_back_for_the_live_panel(client, clip):
+    run = upload(client, clip, roles=("overhead", "shelf"), n=2)
+    rid = run["run_id"]
+    client.post(f"/api/runs/{rid}/start", json={"backend": "reference", "live": False})
+    r = client.get(f"/api/runs/{rid}/video", params={"stream": "overhead"})
+    assert r.status_code == 200 and len(r.content) == clip.stat().st_size
+    assert client.get("/api/dashboard", params={"run_id": rid}).json()["clips"] \
+        == ["overhead", "shelf"]
+
+
+def test_only_this_run_s_own_media_is_served(client, clip, tmp_path):
+    """The path comes from a config file; it must still be inside the run."""
+    run = upload(client, clip)
+    rid = run["run_id"]
+    client.post(f"/api/runs/{rid}/start", json={"backend": "reference", "live": False})
+    cfg = client.server._config_of(rid)
+    outsider = tmp_path / "elsewhere.mp4"
+    outsider.write_bytes(clip.read_bytes())
+    cfg.streams["overhead"]["paths"] = [str(outsider)]      # as if store.yaml said so
+    assert client.get(f"/api/runs/{rid}/video").status_code == 404
+
+
+def test_no_clip_for_a_camera_stream(client, clip):
+    run = upload(client, clip)
+    rid = run["run_id"]
+    client.post(f"/api/runs/{rid}/start", json={"backend": "reference", "live": False})
+    assert client.get(f"/api/runs/{rid}/video", params={"stream": "shelf"}).status_code == 404
+
+
+def test_the_clip_answers_range_requests(client, clip):
+    """A <video> element seeks with Range; a 200 with the whole file will not do."""
+    run = upload(client, clip)
+    rid = run["run_id"]
+    client.post(f"/api/runs/{rid}/start", json={"backend": "reference", "live": False})
+    size = clip.stat().st_size
+
+    r = client.get(f"/api/runs/{rid}/video", headers={"Range": "bytes=10-19"})
+    assert r.status_code == 206
+    assert r.headers["content-range"] == f"bytes 10-19/{size}"
+    assert r.content == clip.read_bytes()[10:20]
+
+    open_ended = client.get(f"/api/runs/{rid}/video", headers={"Range": "bytes=5-"})
+    assert open_ended.status_code == 206 and len(open_ended.content) == size - 5
+    assert client.get(f"/api/runs/{rid}/video").headers["accept-ranges"] == "bytes"
+    assert client.get(f"/api/runs/{rid}/video",
+                      headers={"Range": f"bytes={size + 9}-"}).status_code == 416

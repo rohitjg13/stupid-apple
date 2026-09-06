@@ -102,6 +102,7 @@
   let counters = $derived(d?.counters ?? 2);
   let running = $derived(d?.state === 'running');
   let liveStream = $state('overhead');
+  let clips = $derived(d?.clips ?? []);
 
   let footfallSpark = $derived(d?.footfall_spark ?? new Array(12).fill(0));
   let hourlyFootfall = $derived((d?.footfall_hourly ?? []).map((h) => ({ h: String(h.hour), v: h.entries })));
@@ -519,6 +520,14 @@
         {d?.processed ?? 0}{d?.total ? ` / ${d.total}` : ''} frames · {d?.fps ?? 0} fps ·
         boxes are detections, never identities. No frame is written to disk.
       </div>
+    {:else if clips.includes(liveStream)}
+      <!-- svelte-ignore a11y_media_has_caption -->
+      <video class="live-frame" autoplay loop muted playsinline
+             src={url(`/api/runs/${runId}/video?stream=${liveStream}`)}></video>
+      <div style="margin-top: 8px; font-size: 11px; color: var(--text-dim);">
+        Run finished — replaying the {liveStream} clip. Detections are drawn live
+        while a run is in flight.
+      </div>
     {:else}
       <div class="live-idle">Idle — start a run to watch the pipeline work.</div>
     {/if}
@@ -569,7 +578,8 @@
     background: #fee2e2; color: var(--accent-red); border: 1px solid #fecaca;
   }
   .page-note { margin: 40px; color: var(--text-muted); }
-  .live-frame { width: 100%; display: block; background: #0f172a; }
+  .live-frame { width: 100%; display: block; background: #0f172a;
+                aspect-ratio: 4 / 3; object-fit: contain; }
   .live-idle {
     aspect-ratio: 4 / 3; display: grid; place-items: center;
     background: var(--bg-elevated); color: var(--text-dim); font-size: 13px;
