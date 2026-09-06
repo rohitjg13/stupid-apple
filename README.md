@@ -1,8 +1,9 @@
 # Intelligent Retail Analytics — Edge AI
 
 Shopper analytics, shelf stock-outs and queue intelligence from ordinary store
-cameras, computed **entirely on one edge device**. No cloud, no faces, no stored
-video. Runs on a Jetson Orin Nano; the same tree still runs the PYNQ-Z2 build.
+cameras, computed **entirely on one Jetson Orin Nano**. No cloud, no faces, no
+stored video. (The same tree still builds for a PYNQ-Z2; that is the FPGA
+half of the project, not what gets deployed.)
 
 **Upload a few clips, press next, and it processes them.** That is the whole
 operating procedure.
@@ -78,8 +79,8 @@ knows or cares which one ran:
 | `--backend` | Runs on | What it is |
 |---|---|---|
 | `yolo` | Jetson (CUDA) | YOLOv8 person detector. No warm-up, sees people who stand still. |
-| `reference` | any laptop | OpenCV background subtraction — the golden model of the FPGA chain. |
-| `pl` | PYNQ-Z2 | the FPGA overlay (`hls/`, `pl/driver.py`). |
+| `reference` | any laptop | OpenCV background subtraction. Also the golden model the FPGA chain is checked against. |
+| `pl` | PYNQ-Z2 | the FPGA overlay (`hls/`, `pl/driver.py`) — the alternative target, not the deployed one. |
 | `sim` | anywhere | synthetic store, for development and as a demo fallback. |
 
 `server.py` picks `yolo` when the box has it and `reference` otherwise.
@@ -96,7 +97,7 @@ shelf/      fill.py stockout.py planogram.py pick_detector.py pipeline.py
 backend/    db.py sink.py aggregates.py alerts.py queue_model.py pipeline.py api.py
 web/        the dashboard and the upload wizard (Svelte)
 tools/      autoconfig.py evaluate.py perf.py setup_jetson.sh deploy.sh
-hls/        the FPGA build
+hls/        the PYNQ-Z2 FPGA build (not used on the Jetson)
 main.py     the CLI runner        server.py   the web app
 ```
 
@@ -126,6 +127,17 @@ python geometry/tools/calibrate.py    # a measured homography, when accuracy mat
 ## Tests
 
 ```bash
-pytest -q                                        # 498 tests
+pytest -q                                        # 517 tests
 python main.py --source sim --frames 300 --headless
 ```
+
+## Why this box and not a Raspberry Pi
+
+```bash
+python -m tools.perf --config <clipset> --backends reference yolo
+python -m tools.compare_backends --config <clipset> --a reference --b yolo
+```
+
+The first is ms/frame and fps for the CUDA detector against the CPU chain on
+identical frames; the second is how closely they agree on the boxes themselves.
+Run both on the Jetson — the numbers are the slide.

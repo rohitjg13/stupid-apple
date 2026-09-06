@@ -1,9 +1,13 @@
-"""Per-backend timing table: the numbers behind the silicon slide.
+"""Per-backend timing table: the numbers behind the "why this box" slide.
 
-    python -m tools.perf --config config/overhead_01 --backends reference pl
+    python -m tools.perf --config config/overhead_01 --backends reference yolo
 
-LATENCY is the PL's own first-pixel-in to last-byte-out counter, so it is the
-honest per-frame hardware number, separate from DMA and Python overhead.
+On the Jetson that is the CUDA detector against the CPU chain on the identical
+frames -- the honest answer to "why not a Raspberry Pi".
+
+The `PL ms` column stays empty unless the backend is the PYNQ driver, where it
+reports the fabric's own first-pixel-in to last-byte-out counter, separate from
+DMA and Python overhead.
 """
 from __future__ import annotations
 
@@ -87,7 +91,7 @@ def main(argv=None):
     ap.add_argument("--config", default="config/sim")
     ap.add_argument("--stream", default="overhead")
     ap.add_argument("--source", default="file", choices=["file", "sim", "camera"])
-    ap.add_argument("--backends", nargs="+", default=["reference"])
+    ap.add_argument("--backends", nargs="+", default=["reference", "yolo"])
     ap.add_argument("--frames", type=int, default=200)
     a = ap.parse_args(argv)
 

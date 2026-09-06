@@ -2,9 +2,10 @@
 
 - Read docs/SHARED.md first. FrameResult, the register map, the Event envelope,
   coordinates and config schemas are frozen; never change them silently.
-- Two targets from one tree: a Jetson Orin Nano (`--backend yolo`, the default
-  for `server.py`) and a PYNQ-Z2 (`--backend pl`). Anything that only makes
-  sense on one of them stays behind that backend.
+- **Everything deploys to a Jetson Orin Nano** (`--backend yolo`, what
+  `server.py` picks when the box has it). The PYNQ-Z2 path (`--backend pl`,
+  `hls/`) is a second target kept working, not the one being shipped: never
+  make the Jetson path depend on it, and never assume an FPGA is present.
 - Python 3.10 on the board (PYNQ 3.x). No 3.11+ syntax. Board deps only: numpy,
   opencv-python-headless, fastapi, uvicorn, python-multipart, pyyaml, scipy.
   `torch`/`ultralytics` are Jetson-only and imported lazily inside pl/yolo.py,

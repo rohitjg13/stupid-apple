@@ -1,9 +1,12 @@
 """Run the same clip through two backends and report how far apart they are.
 
 W4 acceptance (docs/plans/02-rohit.md): matched-blob IoU >= 0.7 and blob-count
-agreement >= 90 % between `reference` and `pl`.
+agreement >= 90 % between the accelerated backend and the reference chain.
 
     python -m tools.compare_backends --config config/overhead_01 --frames 300
+
+Defaults to the Jetson pair. `--b pl` compares against the PYNQ overlay
+instead, which is the same question asked of different silicon.
 """
 from __future__ import annotations
 
@@ -95,7 +98,7 @@ def main(argv=None):
     ap.add_argument("--stream", default="overhead")
     ap.add_argument("--source", default="file", choices=["file", "sim", "camera"])
     ap.add_argument("--a", default="reference")
-    ap.add_argument("--b", default="pl")
+    ap.add_argument("--b", default="yolo")
     ap.add_argument("--frames", type=int, default=300)
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)

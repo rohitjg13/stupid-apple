@@ -1,5 +1,9 @@
 # Board bring-up (PYNQ-Z2)
 
+> The deployed target is a Jetson Orin Nano: `sudo tools/setup_jetson.sh`, then
+> `http://<jetson>:8000`. This file is the PYNQ-Z2 runbook, kept for the FPGA
+> half of the project.
+
 ## First time
 
 ```bash
@@ -26,7 +30,8 @@ tools/deploy.sh          # rsync, restart, tail the log
 | Health | `cat /var/lib/retail/health.json` | `clock_unsynced: false`, frames rising |
 | Overlay loaded | `python3 -c "from pl import driver; print(driver.available())"` | `True` |
 | Throughput | `python3 -m tools.perf --backends reference pl --frames 200` | PL ≤ 5 ms/frame |
-| PL vs reference | `python3 -m tools.compare_backends --frames 300` | `PASS` |
+| (on the Jetson) | `python3 -m tools.perf --backends reference yolo --frames 200` | detector holds camera rate |
+| PL vs reference | `python3 -m tools.compare_backends --b pl --frames 300` | `PASS` |
 
 ## The board has no RTC
 
