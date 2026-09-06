@@ -1,0 +1,10 @@
+from_region,to_region,moves,share_pct
+checkout,entrance,7,23.3
+entrance,aisle_a,7,23.3
+entrance,checkout,5,16.7
+aisle_a,checkout,3,10.0
+aisle_a,entrance,2,6.7
+aisle_a,aisle_b,2,6.7
+aisle_b,checkout,2,6.7
+entrance,unzoned,1,3.3
+unzoned,checkout,1,3.3

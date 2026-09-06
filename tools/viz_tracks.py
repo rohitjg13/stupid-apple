@@ -11,8 +11,13 @@ and is honest about which ones need a per-camera config:
     heatmap.png        4. dwell heatmap over a still: light green where people
                           walked, yellow -> red where they stood (full red = 10 s
                           standing, or 5 s for two people on the same spot)
-    dwell.csv          3. per person: seconds present, seconds standing still,
-                          distance walked, which image region they dwelt in
+    dwell.csv          3. per person: present, standing still, distance walked,
+                          shopper type, and the path they took
+    engagement.csv     per display region: how many *passed*, how many *stopped*,
+                          the stop rate and mean dwell -- the retail KPI a
+                          per-frame detector cannot produce
+    flow.csv           region -> region moves: where they went next
+    groups.csv         people who moved around together (a couple, a family)
     footfall.csv       2. per time bucket: people present, arrivals, departures
                           (by *store zone* needs zones.json -> --config)
     entries_exits.csv  1. crossings of the configured door (--config), else a
@@ -43,6 +48,7 @@ from core.config import load_clipset
 from geometry.homography import floor_to_image, image_to_floor
 from geometry.zones import ZoneMap
 from pl.contract import FLAG_BG_WARM
+from shopper.analytics import AnalyticsParams, Journeys
 from shopper.blob_prefilter import prefilter
 from shopper.params import TrackerParams
 from shopper.tracker import Tracker
@@ -199,9 +205,13 @@ def _point_at_video(clipset, video, fps):
 class Report:
     """Everything the four analytics questions need, collected as frames go by."""
 
-    def __init__(self, fps, rect, bucket_s, has_door, has_zones):
+    def __init__(self, fps, rect, bucket_s, has_door, has_zones, zone_namer=None):
         self.fps, self.rect, self.bucket_s = fps, rect, bucket_s
         self.has_door, self.has_zones = has_door, has_zones
+        # Journeys works in whatever "place" names it is given: real zones when a
+        # config supplies them, otherwise the nine image regions.
+        self.journeys = Journeys(fps, zone_namer or (lambda u, v: region_of(u, v, rect)),
+                                 AnalyticsParams())
         self.people = {}                    # id -> record
         self.per_frame = []                 # people present, per frame
         shape = (H // HEAT_CELL, W // HEAT_CELL)
@@ -215,6 +225,8 @@ class Report:
         self.per_frame.append(len(tracks))
         if image is not None:
             self.last_image = image
+        self.journeys.observe(f, [(tr.id, tr.foot, tr.box[2], standing_of(tr))
+                                  for tr in tracks])
         for tr in tracks:
             fu, fv = tr.foot
             rec = self.people.setdefault(tr.id, {
@@ -236,6 +248,7 @@ class Report:
 
     # --- 3. dwell ----------------------------------------------------------
     def dwell_rows(self):
+        journey = {r["person"]: r for r in self.journeys.person_rows()}
         rows = []
         for tid, r in sorted(self.people.items(), key=lambda kv: -kv[1]["present"]):
             top_region = r["regions"].most_common(1)[0][0] if r["regions"] else ""
@@ -249,6 +262,15 @@ class Report:
                    "mostly_in_region": top_region}
             if self.has_zones:
                 row["mostly_in_zone"] = zones.most_common(1)[0][0] if zones else ""
+            j = journey.get(tid, {})
+            # Journey distance (path length while actually moving), not the
+            # tracker's peak excursion -- that is an internal furniture-filter
+            # signal and disagreed with the speed column next to it.
+            row["walked_px"] = j.get("walked_px", 0)
+            row["shopper_type"] = j.get("shopper_type", "")
+            row["stops"] = j.get("stops", 0)
+            row["walking_speed_px_s"] = j.get("mean_walking_speed_px_s", 0.0)
+            row["path"] = j.get("path", "")
             rows.append(row)
         return rows
 
@@ -312,6 +334,9 @@ class Report:
             basis = "frame edge -- proxy; configure a door line for real store entries"
         dw = self.dwell_rows()
         long_dwell = [r for r in dw if r["standing_still_s"] >= 2.0]
+        eng, flow, groups = (self.journeys.engagement_rows(),
+                             self.journeys.transition_rows(),
+                             self.journeys.group_rows())
         hot = None
         if self.heat_dwell.max() > 0:
             gy, gx = np.unravel_index(int(np.argmax(self.heat_dwell)), self.heat_dwell.shape)
@@ -333,6 +358,14 @@ class Report:
             "4_heatmap": {"file": "heatmap.png", "hottest": hot,
                           "cells_walked": int((self.heat_visit > 0).sum()),
                           "legend": "green = walked through, yellow -> red = standing time"},
+            "5_engagement": {"by_place": eng[:5], "file": "engagement.csv",
+                             "note": "passed vs stopped needs identity across time, "
+                                     "which a per-frame detector does not have"},
+            "6_flow": {"top_moves": flow[:5], "file": "flow.csv"},
+            "7_shopper_types": dict(self.journeys.type_counts()),
+            "8_groups": {"groups": len(groups), "largest": max((g["size"] for g in groups),
+                                                              default=0),
+                         "file": "groups.csv"},
         }
 
 
@@ -350,6 +383,9 @@ def write_report(rep, out_dir, video, detector, cfg, stream, heat_full_s=10.0):
             w.writerows(rows)
 
     csv_out("dwell.csv", rep.dwell_rows())
+    csv_out("engagement.csv", rep.journeys.engagement_rows())
+    csv_out("flow.csv", rep.journeys.transition_rows())
+    csv_out("groups.csv", rep.journeys.group_rows())
     csv_out("footfall.csv", rep.footfall_rows())
     csv_out("entries_exits.csv", rep.entries_exits_rows())
 
@@ -365,6 +401,10 @@ def write_report(rep, out_dir, video, detector, cfg, stream, heat_full_s=10.0):
     s = rep.summary(video, detector)
     (out_dir / "summary.json").write_text(json.dumps(s, indent=2))
     ee, ff, dw, hm = s["1_entries_exits"], s["2_footfall"], s["3_dwell"], s["4_heatmap"]
+    eng, flow, types, grp = (s["5_engagement"], s["6_flow"], s["7_shopper_types"], s["8_groups"])
+    place = "zone" if rep.has_zones else "area"
+    top_eng = eng["by_place"][0] if eng["by_place"] else None
+    top_flow = flow["top_moves"][0] if flow["top_moves"] else None
     lines = [
         f"{Path(video).name}  --  {s['duration_s']} s, detector: {detector}",
         "",
@@ -378,6 +418,26 @@ def write_report(rep, out_dir, video, detector, cfg, stream, heat_full_s=10.0):
         f"   per person: dwell.csv    near what: {dw['near']}",
         f"4. HEATMAP           heatmap.png   green = walked, red = stood" +
         (f"   most standing: {hm['hottest']['region']} ({hm['hottest']['standing_s']} s)" if hm["hottest"] else ""),
+        "",
+        "   -- what a per-frame detector cannot tell you --",
+        f"5. ENGAGEMENT        " + (
+            f"most engaging {place}: {top_eng['region']} -- {top_eng['passed']} passed, "
+            f"{top_eng['stopped']} stopped ({top_eng['stop_rate_pct']}%), "
+            f"mean {top_eng['mean_stop_s']} s" if top_eng else "nobody settled anywhere"),
+        f"   per {place}: engagement.csv",
+        f"6. FLOW              " + (
+            f"most common move: {top_flow['from_region']} -> {top_flow['to_region']} "
+            f"({top_flow['moves']}x, {top_flow['share_pct']}% of all moves)"
+            if top_flow else "nobody moved between areas"),
+        "   full matrix: flow.csv",
+        f"7. SHOPPER TYPES     " + (", ".join(f"{n} {k}" for k, n in
+                                              sorted(types.items(), key=lambda kv: -kv[1]))
+                                    or "nobody tracked"),
+        "   browsing = stopped 2+ times, considered = stopped once, "
+        "direct = never stopped, passing = brief",
+        f"8. GROUPS            {grp['groups']} shopping group(s)" +
+        (f", largest {grp['largest']} people" if grp["groups"] else " (everyone alone)"),
+        "   members: groups.csv",
     ]
     (out_dir / "summary.txt").write_text("\n".join(lines) + "\n")
     return out_dir
@@ -477,8 +537,16 @@ def main(argv=None):
     Hm = cfg.homography.get(a.stream)
     fps = float(src.fps)
     rect = content_rect(src_w, src_h) if a.video else (0, 0, W, H)
+    has_zones = zmap is not None and Hm is not None
+
+    def zone_namer(u, v):
+        """Name places by real store zones when configured, else image areas."""
+        if has_zones:
+            return zmap.zone_of(*image_to_floor(Hm, (u, v))) or "unzoned"
+        return region_of(u, v, rect)
+
     rep = Report(fps, rect, a.bucket_s, has_door=bool(wires.wires),
-                 has_zones=zmap is not None and Hm is not None)
+                 has_zones=has_zones, zone_namer=zone_namer)
 
     def standing(tr):
         return tr.held > 0 or tr.seen_speed < p.static_speed_px

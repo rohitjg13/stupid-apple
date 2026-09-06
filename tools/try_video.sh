@@ -9,7 +9,10 @@
 #   tracked.mp4        annotated video with the dwell heatmap
 #   tracked_noheat.mp4 the same without it
 #   heatmap.png        4. dwell heatmap: green = walked through, red = stood still (also in the video)
-#   dwell.csv          3. per person: present, standing still, distance walked, region
+#   dwell.csv          3. per person: present, still, walked, shopper type, path
+#   engagement.csv     per area: passed vs stopped, stop rate, mean dwell
+#   flow.csv           where people went next (area -> area)
+#   groups.csv         people who moved around together
 #   footfall.csv       2. people present / arrivals / departures per time bucket
 #   entries_exits.csv  1. door crossings with --config, else a labelled frame-edge proxy
 #   summary.txt/.json  the headline numbers

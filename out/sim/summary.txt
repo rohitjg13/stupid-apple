@@ -7,3 +7,13 @@ sim  --  60.0 s, detector: mog2
 3. DWELL             13 people stood still >= 2 s, longest 41.67 s
    per person: dwell.csv    near what: image regions (see dwell.csv); named displays need zones.json
 4. HEATMAP           heatmap.png   green = walked, red = stood   most standing: bottom-right (23.8 s)
+
+   -- what a per-frame detector cannot tell you --
+5. ENGAGEMENT        most engaging zone: checkout -- 13 passed, 10 stopped (76.9%), mean 19.2 s
+   per zone: engagement.csv
+6. FLOW              most common move: checkout -> entrance (7x, 23.3% of all moves)
+   full matrix: flow.csv
+7. SHOPPER TYPES     10 browsing, 4 passing, 3 considered, 2 direct
+   browsing = stopped 2+ times, considered = stopped once, direct = never stopped, passing = brief
+8. GROUPS            1 shopping group(s), largest 2 people
+   members: groups.csv

@@ -179,7 +179,34 @@ question -- and honest about which need a per-camera config:
 | `footfall.csv` | 2. footfall over time | people present, arrivals, departures per 10 s bucket | same, plus `mostly_in_zone` per person in `dwell.csv` |
 | `dwell.csv` | 3. dwell near products | per person: seconds present, seconds standing still, distance walked, image region | plus the named zone |
 | `heatmap.png` | 4. heatmap | **dwell heatmap** over a still: light green where people walked, yellow → red where they stood; full red = 10 s standing, or two people for 5 s | same, with zone outlines |
+| `engagement.csv` | *stop rate* | per area: how many **passed**, how many **stopped**, stop rate, mean dwell | per named zone |
+| `flow.csv` | *flow* | area → area moves: where they went next | zone → zone |
+| `groups.csv` | *groups* | people who moved around together (couple, family) | same |
 | `tracked.mp4`, `tracked_noheat.mp4`, `summary.txt/.json` | | annotated video with and without the heatmap; headline numbers | |
+
+### Why these four and not more charts
+
+A person detector answers "where are people in this frame" -- a fact about one
+frame, with no memory. Detection is now a commodity: a teammate's inventory
+detector finds people perfectly well, and it could be swapped into `pl/yolo.py`'s
+slot and every number below would still compute. What it cannot do is anything
+requiring **identity across time**, which is exactly what these are:
+
+* **Stop rate.** Of everyone who walked past a display, what share stopped? This
+  is the retail KPI, and it needs the same person seen walking past *and*
+  standing still. `shopper/analytics.py`.
+* **Flow.** Where people went next, aggregated into a transition matrix. Turns
+  the heatmap from *where* into *where from and to*.
+* **Shopper type.** browsing (stopped 2+ times) / considered (once) / direct
+  (never) / passing (brief). By stop *count*, not time standing: someone who
+  studies one display for a minute considered one thing, which is a different
+  shopper from one who sampled four.
+* **Groups.** Tracks that stay within a body width of each other, merged
+  transitively so A-with-B and B-with-C is one group of three. Shoppers are not
+  shopping *parties*, and a party of three buys once.
+
+None of these publish Events: `docs/SHARED.md` §5 is frozen and has no
+`event_type` for them, so they are report-only until that table gains one.
 
 "By day" is not a per-clip number: the backend aggregates `footfall_by_day`
 across runs. The heatmap is in the video too, on an **absolute** scale

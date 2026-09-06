@@ -30,5 +30,53 @@
     },
     "cells_walked": 9,
     "legend": "green = walked through, yellow -> red = standing time"
+  },
+  "5_engagement": {
+    "by_place": [
+      {
+        "region": "bottom-right",
+        "passed": 2,
+        "stopped": 1,
+        "stop_rate_pct": 50.0,
+        "mean_stop_s": 3.9,
+        "total_stop_s": 3.9
+      },
+      {
+        "region": "middle-right",
+        "passed": 1,
+        "stopped": 0,
+        "stop_rate_pct": 0.0,
+        "mean_stop_s": 0.0,
+        "total_stop_s": 0
+      }
+    ],
+    "file": "engagement.csv",
+    "note": "passed vs stopped needs identity across time, which a per-frame detector does not have"
+  },
+  "6_flow": {
+    "top_moves": [
+      {
+        "from_region": "bottom-right",
+        "to_region": "middle-right",
+        "moves": 1,
+        "share_pct": 50.0
+      },
+      {
+        "from_region": "middle-right",
+        "to_region": "bottom-right",
+        "moves": 1,
+        "share_pct": 50.0
+      }
+    ],
+    "file": "flow.csv"
+  },
+  "7_shopper_types": {
+    "considered": 1,
+    "passing": 1
+  },
+  "8_groups": {
+    "groups": 0,
+    "largest": 0,
+    "file": "groups.csv"
   }
 }

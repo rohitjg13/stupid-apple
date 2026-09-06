@@ -7,3 +7,13 @@ vid2.mp4  --  19.5 s, detector: yolo
 3. DWELL             4 people stood still >= 2 s, longest 12.79 s
    per person: dwell.csv    near what: image regions (see dwell.csv); named displays need zones.json
 4. HEATMAP           heatmap.png   green = walked, red = stood   most standing: middle-centre (15.1 s)
+
+   -- what a per-frame detector cannot tell you --
+5. ENGAGEMENT        most engaging area: bottom-left -- 4 passed, 2 stopped (50.0%), mean 7.7 s
+   per area: engagement.csv
+6. FLOW              most common move: bottom-centre -> middle-centre (2x, 25.0% of all moves)
+   full matrix: flow.csv
+7. SHOPPER TYPES     11 passing, 2 considered, 1 direct, 1 browsing
+   browsing = stopped 2+ times, considered = stopped once, direct = never stopped, passing = brief
+8. GROUPS            0 shopping group(s) (everyone alone)
+   members: groups.csv

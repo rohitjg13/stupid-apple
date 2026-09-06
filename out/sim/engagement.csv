@@ -1,0 +1,6 @@
+region,passed,stopped,stop_rate_pct,mean_stop_s,total_stop_s
+checkout,13,10,76.9,19.2,191.5
+aisle_a,8,7,87.5,11.8,82.4
+entrance,19,7,36.8,7.2,50.4
+aisle_b,2,1,50.0,5.7,5.7
+unzoned,1,0,0.0,0.0,0

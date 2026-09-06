@@ -1,0 +1,7 @@
+region,passed,stopped,stop_rate_pct,mean_stop_s,total_stop_s
+bottom-left,4,2,50.0,7.7,15.3
+bottom-centre,4,2,50.0,5.3,10.7
+middle-right,2,1,50.0,2.5,2.5
+middle-centre,2,1,50.0,2.1,2.1
+bottom-right,1,0,0.0,0.0,0
+middle-left,3,0,0.0,0.0,0

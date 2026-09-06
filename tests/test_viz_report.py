@@ -37,8 +37,11 @@ def test_buckets_are_whole_seconds_of_frames():
 
 
 class FakeTrack:
-    def __init__(self, tid, foot, travelled=0.0):
-        self.id, self.foot, self.travelled, self.held, self.seen_speed = tid, foot, travelled, 0, 0.0
+    def __init__(self, tid, foot, travelled=0.0, width=40):
+        self.id, self.foot, self.travelled = tid, foot, travelled
+        self.held, self.seen_speed = 0, 0.0
+        # (x, y, w, h) -- Journeys reads box[2] to scale "close enough to be a group"
+        self.box = (foot[0] - width / 2, foot[1] - 3 * width, width, 3 * width)
 
 
 def test_footfall_counts_arrivals_and_departures_per_bucket():
@@ -62,7 +65,10 @@ def test_dwell_reports_seconds_and_the_region_they_stood_in():
         rep.frame(f, [FakeTrack(7, (600, 460), travelled=55)], lambda tr: f >= 10, lambda tr: None, None)
     row = rep.dwell_rows()[0]
     assert row["present_s"] == 3.0 and row["standing_still_s"] == 2.0
-    assert row["mostly_in_region"] == "bottom-right" and row["walked_px"] == 55
+    assert row["mostly_in_region"] == "bottom-right"
+    # walked_px is journey distance, so someone who never moved walked nothing --
+    # it is not the tracker's peak-excursion signal, which would say 55 here.
+    assert row["walked_px"] == 0
 
 
 def test_edge_proxy_counts_a_walk_through_as_one_entry_and_one_exit():

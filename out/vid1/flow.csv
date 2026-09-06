@@ -1,0 +1,3 @@
+from_region,to_region,moves,share_pct
+bottom-left,bottom-centre,1,50.0
+bottom-centre,bottom-left,1,50.0

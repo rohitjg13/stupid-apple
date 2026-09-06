@@ -1,16 +1,16 @@
-person,first_seen_s,last_seen_s,present_s,standing_still_s,walked_px,mostly_in_region
-16,5.79,19.46,13.08,12.79,56,bottom-left
-21,8.42,19.46,10.92,10.58,37,bottom-centre
-4,0.88,9.79,8.88,4.46,589,bottom-left
-6,1.0,7.92,6.96,6.92,12,bottom-centre
-1,0.08,2.12,1.75,1.75,40,bottom-centre
-24,15.58,16.96,1.42,1.42,1,bottom-left
-0,0.08,1.17,1.12,0.96,18,bottom-left
-11,3.21,4.29,0.88,0.88,4,middle-right
-3,0.79,1.54,0.79,0.79,8,middle-left
-9,1.75,2.67,0.33,0.21,34,middle-centre
-13,4.12,4.58,0.29,0.29,7,middle-right
-14,4.33,4.58,0.25,0.25,3,middle-left
-7,1.08,1.29,0.21,0.21,18,bottom-left
-8,1.21,1.29,0.12,0.12,5,middle-right
-26,19.38,19.46,0.12,0.12,2,middle-right
+person,first_seen_s,last_seen_s,present_s,standing_still_s,walked_px,mostly_in_region,shopper_type,stops,walking_speed_px_s,path
+16,5.79,19.46,13.08,12.79,16,bottom-left,considered,1,55.0,middle-left > bottom-left > middle-left
+21,8.42,19.46,10.92,10.58,4,bottom-centre,browsing,2,12.6,bottom-centre > middle-centre > middle-right
+4,0.88,9.79,8.88,4.46,646,bottom-left,direct,0,146.3,bottom-left > bottom-centre > bottom-right
+6,1.0,7.92,6.96,6.92,6,bottom-centre,considered,1,153.9,bottom-centre
+1,0.08,2.12,1.75,1.75,0,bottom-centre,passing,0,0.0,bottom-centre > middle-centre
+24,15.58,16.96,1.42,1.42,0,bottom-left,passing,0,0.0,bottom-left > middle-left
+0,0.08,1.17,1.12,0.96,5,bottom-left,passing,0,29.8,bottom-left
+11,3.21,4.29,0.88,0.88,0,middle-right,passing,0,0.0,middle-right
+3,0.79,1.54,0.79,0.79,0,middle-left,passing,0,0.0,middle-left
+9,1.75,2.67,0.33,0.21,16,middle-centre,passing,0,124.5,
+13,4.12,4.58,0.29,0.29,0,middle-right,passing,0,0.0,
+14,4.33,4.58,0.25,0.25,0,middle-left,passing,0,0.0,
+7,1.08,1.29,0.21,0.21,0,bottom-left,passing,0,0.0,
+8,1.21,1.29,0.12,0.12,0,middle-right,passing,0,0.0,
+26,19.38,19.46,0.12,0.12,0,middle-right,passing,0,0.0,
