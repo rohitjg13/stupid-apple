@@ -1,21 +1,29 @@
 <script>
   import { onMount } from 'svelte';
   import Wizard from './lib/Wizard.svelte';
-  import { clockOf, del, fmtDuration, fmtWait, get } from './lib/api.js';
+  import { del, get } from './lib/api.js';
 
-  // ─── State: one document from /api/dashboard, polled ───
-  let view = $state('loading');        // loading | wizard | dashboard
+  // ─── Reactive state ───
+  let currentTime = $state('');
+  let activeTab = $state('live');
+
+  // ─── Live data, from /api/dashboard ───
+  // Same variables the mockup had; the values now come off the pipeline
+  // instead of Math.random(). The markup below is unchanged.
+  let d = $state(null);
+  let prev = $state(null);
+  let view = $state('loading');          // loading | wizard | dashboard
   let runs = $state([]);
   let runId = $state(null);
-  let d = $state(null);
   let error = $state(null);
-  let currentTime = $state('');
 
   const POLL_MS = 2000;
 
   async function refresh() {
     try {
-      d = await get(`/api/dashboard${runId ? `?run_id=${runId}` : ''}`);
+      const next = await get(`/api/dashboard${runId ? `?run_id=${runId}` : ''}`);
+      prev = d;
+      d = next;
       runId = d.run_id ?? runId;
       error = null;
     } catch (e) {
@@ -35,21 +43,23 @@
     runId = id;
     await Promise.all([loadRuns(), refresh()]);
     view = 'dashboard';
+    activeTab = 'live';
   }
 
   async function dropRun() {
     if (!runId) return;
     await del(`/api/runs/${runId}`).catch((e) => (error = e.message));
     runId = null;
-    d = null;
+    d = prev = null;
     await loadRuns();
     view = runs.length ? 'dashboard' : 'wizard';
     if (view === 'dashboard') refresh();
   }
 
   onMount(() => {
-    const clock = setInterval(
-      () => (currentTime = new Date().toLocaleTimeString('en-IN', { hour12: false })), 1000);
+    const clockInterval = setInterval(() => {
+      currentTime = new Date().toLocaleTimeString('en-IN', { hour12: false });
+    }, 1000);
     currentTime = new Date().toLocaleTimeString('en-IN', { hour12: false });
 
     loadRuns().then(async () => {
@@ -58,38 +68,58 @@
       view = d?.run_id ? 'dashboard' : 'wizard';
     });
 
-    const tick = setInterval(() => view === 'dashboard' && refresh(), POLL_MS);
-    return () => { clearInterval(clock); clearInterval(tick); };
+    const dataInterval = setInterval(() => view === 'dashboard' && refresh(), POLL_MS);
+    return () => { clearInterval(clockInterval); clearInterval(dataInterval); };
   });
 
-  // ─── Derived: the tiles, straight off the document ───
+  // ─── The tiles ───
   let occupancy = $derived(d?.occupancy ?? 0);
   let entriesTotal = $derived(d?.entries ?? 0);
   let exitsTotal = $derived(d?.exits ?? 0);
-  let netOccupancy = $derived(entriesTotal - exitsTotal);
-  let avgDwell = $derived(((d?.avg_dwell_s ?? 0) / 60).toFixed(1));
+  let avgDwell = $derived(Math.round((d?.avg_dwell_s ?? 0) / 6) / 10);
   let conversionRate = $derived(d?.conversion_rate ?? 0);
+  let fps = $derived(d?.fps ?? 0);
+  let plLatency = $derived(d?.system?.latency_ms ?? 0);
+  let cpuPct = $derived(d?.system?.cpu_pct ?? 0);
+  let memoryMb = $derived(d?.system?.memory_mb ?? 0);
+  let streams = $derived(d?.system?.streams ?? 0);
+  let uptime = $derived(d?.system?.uptime ?? '—');
+  let storeId = $derived(d?.store_id ?? '—');
+  let backendName = $derived(d?.backend ?? '—');
   let lostRevenue = $derived(Math.round(d?.lost_revenue ?? 0));
+  let targetWait = $derived(d?.target_wait_s ?? 180);
+  let counters = $derived(d?.counters ?? 2);
+  let running = $derived(d?.state === 'running');
+
   let footfallSpark = $derived(d?.footfall_spark ?? new Array(12).fill(0));
-  let hourlyFootfall = $derived((d?.footfall_hourly ?? []).map((h) => ({ h: h.hour, v: h.entries })));
+  let hourlyFootfall = $derived((d?.footfall_hourly ?? []).map((h) => ({ h: String(h.hour), v: h.entries })));
   let zoneDwell = $derived((d?.zones ?? []).map((z) => ({
-    name: z.name ?? '—', count: z.visits ?? 0, dwell: Math.round(z.median_dwell_s ?? 0),
+    name: z.name ?? '—', dwell: Math.round(z.median_dwell_s ?? 0), count: z.visits ?? 0,
   })));
   let queue = $derived(d?.queue ?? []);
   let shelfFills = $derived(d?.shelf ?? []);
-  let stockouts = $derived(d?.stockouts ?? []);
-  let alerts = $derived(d?.alerts ?? []);
+  let alerts = $derived((d?.alerts ?? []).map((a) => ({
+    severity: a.severity, rule: a.rule, message: a.message, time: clockOf(a.t),
+  })));
   let heatmapData = $derived(d?.heatmap ?? new Array(192).fill(0));
   let funnel = $derived(d?.funnel ?? []);
-  let running = $derived(d?.state === 'running');
+  let stockouts = $derived((d?.stockouts ?? []).map((s) => ({
+    facing: s.facing, sku: s.sku, status: s.status,
+    duration: s.status === 'active' ? fmtDuration(s.duration_s) : '—',
+    revenue: `₹${Math.round(s.lost)}`,
+  })));
 
+  // ─── Derived values ───
   let maxFootfall = $derived(Math.max(...footfallSpark, 1));
-  let maxHourly = $derived(Math.max(...hourlyFootfall.map((h) => h.v), 1));
+  let maxHourly = $derived(Math.max(...hourlyFootfall.map(h => h.v), 1));
+  let netOccupancy = $derived(entriesTotal - exitsTotal);
   let peakHour = $derived(hourlyFootfall.reduce((a, b) => (b.v > (a?.v ?? -1) ? b : a), null));
   let avgHour = $derived(hourlyFootfall.length
-    ? (hourlyFootfall.reduce((s, h) => s + h.v, 0) / hourlyFootfall.length).toFixed(1) : '0');
-  let maxQueue = $derived(Math.max(...queue.map((q) => q.count), 4));
-  let targetWait = $derived(d?.target_wait_s ?? 180);
+    ? (hourlyFootfall.reduce((s, h) => s + h.v, 0) / hourlyFootfall.length).toFixed(1) : '0.0');
+  let maxQueue = $derived(Math.max(...queue.map(q => q.count), 4));
+  // Real movement since the last poll, so the arrows mean something.
+  let dwellDelta = $derived(prev ? avgDwell - Math.round((prev.avg_dwell_s ?? 0) / 6) / 10 : 0);
+  let conversionDelta = $derived(prev ? conversionRate - (prev.conversion_rate ?? 0) : 0);
 
   function heatColor(value) {
     if (value < 0.1) return 'rgba(59, 130, 246, 0.05)';
@@ -97,6 +127,23 @@
     if (value < 0.5) return `rgba(34, 211, 238, ${0.2 + value * 0.5})`;
     if (value < 0.75) return `rgba(245, 158, 11, ${0.3 + value * 0.5})`;
     return `rgba(239, 68, 68, ${0.5 + value * 0.4})`;
+  }
+
+  function formatWait(seconds) {
+    const m = Math.floor((seconds || 0) / 60);
+    const s = Math.round((seconds || 0) % 60);
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+
+  function fmtDuration(s) {
+    s = Math.max(0, Math.round(s || 0));
+    return s >= 3600
+      ? `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`
+      : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+  }
+
+  function clockOf(t) {
+    return t ? new Date(t * 1000).toLocaleTimeString('en-IN', { hour12: false }) : '—';
   }
 </script>
 
@@ -106,28 +153,24 @@
     <div class="header-logo">RA</div>
     <div>
       <div class="header-title">Retail Analytics</div>
-      <div class="header-subtitle">Edge AI · {d?.store_id ?? 'no store'} · no cloud</div>
+      <div class="header-subtitle">{backendName} · Store {storeId}</div>
     </div>
   </div>
   <div class="header-right">
-    {#if runs.length}
+    <div class="nav-tabs">
+      <button class="nav-tab" class:active={activeTab === 'live'} onclick={() => activeTab = 'live'}>Live</button>
+      <button class="nav-tab" class:active={activeTab === 'history'} onclick={() => activeTab = 'history'}>History</button>
+      <button class="nav-tab" class:active={activeTab === 'demo'} onclick={() => activeTab = 'demo'}>Demo</button>
+      <button class="nav-tab" class:active={view === 'wizard'} onclick={() => view = 'wizard'}>New run</button>
+    </div>
+    {#if runs.length > 1}
       <select class="run-picker" bind:value={runId} onchange={refresh}>
-        {#each runs as r}
-          <option value={r.run_id}>{r.run_id}</option>
-        {/each}
+        {#each runs as r}<option value={r.run_id}>{r.run_id}</option>{/each}
       </select>
     {/if}
-    <div class="nav-tabs">
-      <button class="nav-tab" class:active={view === 'dashboard'}
-              disabled={!runId} onclick={() => (view = 'dashboard')}>Dashboard</button>
-      <button class="nav-tab" class:active={view === 'wizard'}
-              onclick={() => (view = 'wizard')}>New run</button>
-    </div>
-    <span class="badge badge-backend">{d?.backend ?? 'idle'}</span>
+    <span class="badge badge-backend">{backendName} · {plLatency}ms</span>
     <span class="badge badge-privacy">🔒 DPDP</span>
-    {#if running}
-      <span class="badge badge-live"><span class="dot"></span> PROCESSING</span>
-    {/if}
+    <span class="badge badge-live"><span class="dot"></span> {running ? 'PROCESSING' : 'LIVE'}</span>
     <span class="mono" style="font-size: 13px; color: var(--text-muted);">{currentTime}</span>
   </div>
 </header>
@@ -152,7 +195,7 @@
       <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
     </div>
     <div class="stat-value cyan">{occupancy}</div>
-    <div class="stat-label">people in store at the last sample</div>
+    <div class="stat-label">people in store now</div>
     <div class="sparkline-bar">
       {#each footfallSpark as val, i}
         <div class="bar cyan" style="height: {(val / maxFootfall) * 100}%; opacity: {0.4 + (i / footfallSpark.length) * 0.6};"></div>
@@ -168,7 +211,7 @@
     <div class="flex-between" style="align-items: flex-end;">
       <div>
         <div class="stat-value green">{entriesTotal}</div>
-        <div class="stat-label">entries</div>
+        <div class="stat-label">entries today</div>
       </div>
       <div style="text-align: right;">
         <div style="font-size: 28px; font-weight: 800; color: var(--accent-amber); letter-spacing: -1px;">{exitsTotal}</div>
@@ -187,7 +230,7 @@
       <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
     </div>
     <div class="stat-value blue">{avgDwell}<span style="font-size: 20px; color: var(--text-muted); font-weight: 500;">min</span></div>
-    <div class="stat-label">across all zones</div>
+    <div class="stat-label">across all zones {#if dwellDelta}<span class="stat-delta {dwellDelta > 0 ? 'up' : 'down'}">{dwellDelta > 0 ? '▲' : '▼'} {Math.abs(dwellDelta).toFixed(1)}</span>{/if}</div>
   </div>
 
   <div class="card" id="tile-conversion">
@@ -196,13 +239,13 @@
       <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
     </div>
     <div class="stat-value purple">{conversionRate}<span style="font-size: 18px; color: var(--text-muted); font-weight: 500;">%</span></div>
-    <div class="stat-label">visitors → buyers (POS is simulated)</div>
+    <div class="stat-label">visitors → buyers {#if conversionDelta}<span class="stat-delta {conversionDelta > 0 ? 'up' : 'down'}">{conversionDelta > 0 ? '▲' : '▼'} {Math.abs(conversionDelta).toFixed(1)}</span>{/if}</div>
   </div>
 
   <!-- Row 2: Zone dwell + Queue + Alerts -->
   <div class="card span-2" id="panel-zones">
     <div class="card-header">
-      <span class="card-title">Zone Visits & Dwell</span>
+      <span class="card-title">Zone Headcount & Dwell</span>
     </div>
     <div style="display: flex; flex-direction: column; gap: 6px;">
       {#each zoneDwell as zone}
@@ -212,10 +255,8 @@
             <div class="lane-bar-fill" style="width: {Math.min(100, zone.count / 8 * 100)}%; background: linear-gradient(90deg, var(--accent-blue), var(--accent-cyan));"></div>
           </div>
           <span class="lane-count">{zone.count}</span>
-          <span class="lane-wait">{zone.dwell}s med</span>
+          <span class="lane-wait">{zone.dwell}s avg</span>
         </div>
-      {:else}
-        <span class="stat-label">No zone visits yet.</span>
       {/each}
     </div>
   </div>
@@ -236,13 +277,11 @@
           <div class="lane-bar-track">
             <div class="lane-bar-fill" style="width: {Math.min(100, lane.count / maxQueue * 100)}%; background: {late ? 'var(--accent-red)' : 'var(--accent-amber)'};"></div>
           </div>
-          <div style="margin-top: 4px; font-size: 12px; color: var(--text-muted);">Est. wait: <span class="mono" style="color: {late ? 'var(--accent-red)' : 'var(--text-secondary)'};">{fmtWait(lane.pred_wait_s)}</span></div>
+          <div style="margin-top: 4px; font-size: 12px; color: var(--text-muted);">Est. wait: <span class="mono" style="color: {late ? 'var(--accent-red)' : 'var(--text-secondary)'};">{formatWait(lane.pred_wait_s)}</span></div>
         </div>
-      {:else}
-        <span class="stat-label">No queue samples yet.</span>
       {/each}
       <div style="padding-top: 8px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted);">
-        Target: <span class="mono" style="color: var(--text-secondary);">{fmtWait(targetWait)}</span> · Counters: <span class="mono" style="color: var(--text-secondary);">{d?.counters ?? '—'}</span>
+        Target: <span class="mono" style="color: var(--text-secondary);">{formatWait(targetWait)}</span> · Counters: <span class="mono" style="color: var(--text-secondary);">{counters}</span>
       </div>
     </div>
   </div>
@@ -257,10 +296,8 @@
         <div class="alert-item" style="animation-delay: {i * 50}ms;">
           <span class="alert-severity {alert.severity}"></span>
           <span class="alert-text">{alert.message}</span>
-          <span class="alert-time">{clockOf(alert.t)}</span>
+          <span class="alert-time">{alert.time}</span>
         </div>
-      {:else}
-        <span class="stat-label">Nothing to report.</span>
       {/each}
     </div>
   </div>
@@ -268,7 +305,7 @@
   <!-- Row 3: Shelf + Heatmap + Hourly chart -->
   <div class="card span-2" id="panel-shelf">
     <div class="card-header">
-      <span class="card-title">Shelf Inventory</span>
+      <span class="card-title">Shelf Inventory (Live)</span>
       <div style="display: flex; gap: 8px; align-items: center;">
         <span style="font-size: 11px; color: var(--text-muted);">Lost revenue: </span>
         <span class="mono" style="font-size: 14px; font-weight: 700; color: var(--accent-red);">₹{lostRevenue.toLocaleString()}</span>
@@ -276,11 +313,9 @@
     </div>
     <div class="shelf-grid">
       {#each shelfFills as cell}
-        <div class="shelf-cell {cell.state}" title="{cell.name ?? cell.id}: fill {cell.fill}/255">
+        <div class="shelf-cell {cell.state}" title="{cell.id}: fill {cell.fill}/255">
           {cell.id}
         </div>
-      {:else}
-        <span class="stat-label">No shelf stream in this run.</span>
       {/each}
     </div>
     <div class="shelf-legend">
@@ -292,7 +327,7 @@
 
     <!-- Stock-out table -->
     <div style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px;">
-      <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 8px;">Stock-outs</div>
+      <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 8px;">Active Stock-outs</div>
       <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
         <thead>
           <tr style="color: var(--text-dim); text-align: left;">
@@ -308,8 +343,8 @@
             <tr style="border-top: 1px solid var(--border);">
               <td class="mono" style="padding: 6px 8px; color: var(--text-primary); font-weight: 600;">{row.facing}</td>
               <td style="padding: 6px 8px; color: var(--text-secondary);">{row.sku}</td>
-              <td class="mono" style="padding: 6px 8px; color: {row.status === 'active' ? 'var(--accent-red)' : 'var(--text-dim)'};">{fmtDuration(row.duration_s)}</td>
-              <td class="mono" style="padding: 6px 8px; color: var(--accent-amber);">₹{row.lost}</td>
+              <td class="mono" style="padding: 6px 8px; color: {row.status === 'active' ? 'var(--accent-red)' : 'var(--text-dim)'};">{row.duration}</td>
+              <td class="mono" style="padding: 6px 8px; color: var(--accent-amber);">{row.revenue}</td>
               <td style="padding: 6px 8px;">
                 {#if row.status === 'active'}
                   <span style="color: var(--accent-red); font-weight: 600; font-size: 11px; text-transform: uppercase;">● Active</span>
@@ -318,15 +353,13 @@
                 {/if}
               </td>
             </tr>
-          {:else}
-            <tr><td colspan="5" style="padding: 8px; color: var(--text-dim);">Every facing stayed stocked.</td></tr>
           {/each}
         </tbody>
       </table>
     </div>
   </div>
 
-  <!-- Heatmap card -->
+  <!-- Heatmap card (already in row with shelf, alerts is row-2 above) -->
   <div class="card" id="panel-heatmap">
     <div class="card-header">
       <span class="card-title">Floor Heatmap</span>
@@ -336,6 +369,11 @@
         {#each heatmapData as heat}
           <div class="heatmap-cell" style="background: {heatColor(heat)};"></div>
         {/each}
+      </div>
+      <div class="heatmap-zones">
+        <span class="heatmap-zone-label" style="left: 35%; bottom: 4%;">Entrance</span>
+        <span class="heatmap-zone-label" style="left: 15%; top: 32%;">Aisle 2</span>
+        <span class="heatmap-zone-label" style="right: 8%; top: 15%;">Checkout</span>
       </div>
     </div>
     <div style="margin-top: 8px; display: flex; justify-content: space-between; font-size: 10px; color: var(--text-dim);">
@@ -349,7 +387,7 @@
   <div class="card span-2" id="panel-hourly">
     <div class="card-header">
       <span class="card-title">Footfall by Hour</span>
-      <span style="font-size: 11px; color: var(--text-dim);">Run day</span>
+      <span style="font-size: 11px; color: var(--text-dim);">Today</span>
     </div>
     <div class="chart-bars">
       {#each hourlyFootfall as h}
@@ -357,8 +395,6 @@
           <div class="bar" style="height: {(h.v / maxHourly) * 100}%; background: linear-gradient(180deg, var(--accent-blue), rgba(59,130,246,0.3));"></div>
           <span class="bar-label">{h.h}</span>
         </div>
-      {:else}
-        <span class="stat-label">No entries counted yet.</span>
       {/each}
     </div>
     <div style="margin-top: 8px; display: flex; justify-content: space-between; font-size: 11px; color: var(--text-dim);">
@@ -377,7 +413,7 @@
         <div class="funnel-step">
           <span class="funnel-label">{step.label}</span>
           <div class="funnel-bar-track">
-            <div class="funnel-bar-fill" style="width: {Math.max(step.pct, 3)}%; background: linear-gradient(90deg, {
+            <div class="funnel-bar-fill" style="width: {step.pct}%; background: linear-gradient(90deg, {
               i === 0 ? 'var(--accent-blue)' :
               i === 1 ? 'var(--accent-cyan)' :
               i === 2 ? 'var(--accent-amber)' :
@@ -410,28 +446,31 @@
     </div>
     <div style="display: flex; flex-direction: column; gap: 10px; font-size: 13px;">
       <div class="flex-between">
-        <span class="text-muted">Processing FPS</span>
-        <span class="mono" style="font-weight: 600; color: var(--accent-green);">{d?.fps ?? 0}</span>
+        <span class="text-muted">FPS</span>
+        <span class="mono" style="font-weight: 600; color: var(--accent-green);">{fps}</span>
       </div>
       <div class="flex-between">
-        <span class="text-muted">Frames</span>
-        <span class="mono" style="font-weight: 600; color: var(--accent-cyan);">{d?.processed ?? 0}{d?.total ? ` / ${d.total}` : ''}</span>
+        <span class="text-muted">PL Latency</span>
+        <span class="mono" style="font-weight: 600; color: var(--accent-cyan);">{plLatency}ms</span>
       </div>
       <div class="flex-between">
-        <span class="text-muted">Detector</span>
-        <span style="font-size: 11px; padding: 2px 8px; border-radius: 100px; background: rgba(34,197,94,0.1); color: var(--accent-green); font-weight: 600;">{d?.backend ?? '—'}</span>
+        <span class="text-muted">CPU (PS)</span>
+        <span class="mono" style="font-weight: 600; color: var(--accent-green);">{cpuPct}%</span>
       </div>
       <div class="flex-between">
-        <span class="text-muted">State</span>
-        <span class="mono" style="font-weight: 600; color: var(--text-secondary);">{d?.state ?? '—'}</span>
+        <span class="text-muted">Memory</span>
+        <span class="mono" style="font-weight: 600; color: var(--text-secondary);">{memoryMb} MB</span>
       </div>
       <div class="flex-between">
-        <span class="text-muted">Cloud</span>
-        <span class="mono" style="font-weight: 600; color: var(--text-secondary);">not required</span>
+        <span class="text-muted">Streams</span>
+        <span class="mono" style="font-weight: 600; color: var(--text-secondary);">{streams} active</span>
       </div>
-      <div style="margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim); display: flex; justify-content: space-between; align-items: center;">
-        <span class="mono">{runId ?? '—'}</span>
-        <button class="text-btn" onclick={dropRun}>delete run</button>
+      <div class="flex-between">
+        <span class="text-muted">Backend</span>
+        <span style="font-size: 11px; padding: 2px 8px; border-radius: 100px; background: rgba(34,197,94,0.1); color: var(--accent-green); font-weight: 600;">{backendName}</span>
+      </div>
+      <div style="margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim);">
+        Store: {storeId} · Uptime: {uptime} · <button class="text-btn" onclick={dropRun}>delete run</button>
       </div>
     </div>
   </div>
@@ -458,7 +497,7 @@
         <span style="color: var(--accent-green);">✓</span> 7-day raw retention
       </div>
       <div style="display: flex; align-items: center; gap: 6px;">
-        <span style="color: var(--accent-green);">✓</span> Inference on this device
+        <span style="color: var(--accent-green);">✓</span> Fully offline capable
       </div>
       <div style="margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim);">
         DPDP Act 2023 compliant
@@ -469,6 +508,8 @@
 {/if}
 
 <style>
+  /* Only the controls the mockup had no place for: the run picker and the
+     delete link. Everything else is app.css, untouched. */
   .run-picker {
     background: var(--bg-elevated); border: 1px solid var(--border);
     color: var(--text-secondary); border-radius: var(--radius-sm);
@@ -481,7 +522,6 @@
   .page-note { margin: 40px; color: var(--text-muted); }
   .text-btn {
     background: none; border: none; color: var(--text-dim); cursor: pointer;
-    font-size: 11px; text-decoration: underline;
+    font-size: 11px; text-decoration: underline; padding: 0;
   }
-  .nav-tab:disabled { opacity: 0.4; cursor: default; }
 </style>

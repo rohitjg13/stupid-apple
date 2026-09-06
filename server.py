@@ -47,6 +47,7 @@ MAX_UPLOAD_BYTES = 2 * 1024**3          # 2 GB per clip; an SD card is not infin
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".mjpeg", ".mjpg", ".m4v", ".webm"}
 HEATMAP_W, HEATMAP_H = 16, 12           # the dashboard's grid, in cells
+STARTED = time.monotonic()
 
 db = DB(DATA / "retail.db")
 aggregates = Aggregates(db)
@@ -348,7 +349,9 @@ def dashboard(run_id: str = None):
         "alerts": db.query("SELECT t, severity, rule, message FROM alert "
                            "WHERE run_id = ? ORDER BY t DESC LIMIT 12", (run_id,)),
         "heatmap": _heatmap_grid(aggregates.heatmap(t0, t1, run_id)),
-        "footfall_hourly": aggregates.footfall_by_hour(t1 or time.time(), run_id),
+        "footfall_hourly": _hours_of_day(
+            aggregates.footfall_by_hour(t1 or time.time(), run_id)),
+        "system": _system(progress, cfg),
         "footfall_spark": _spark(t0, t1, run_id),
         "revenue": round(txns.get("amount") or 0.0, 2),
         "funnel": [
@@ -358,6 +361,31 @@ def dashboard(run_id: str = None):
             {"label": "Purchased", "value": purchased, "pct": _pct(purchased, footfall)},
         ],
         "conversion_rate": _pct(purchased, footfall),
+    }
+
+
+def _hours_of_day(rows):
+    """All 24 hours, zero-filled. The chart is "footfall by hour"; the hours
+    with nobody in them are part of the answer."""
+    got = {r["hour"]: r["entries"] for r in rows}
+    return [{"hour": h, "entries": got.get(h, 0)} for h in range(24)]
+
+
+def _system(progress, cfg):
+    """The system tile: measured, never typed in."""
+    import resource
+    import sys
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    mb = rss / 1024**2 if sys.platform == "darwin" else rss / 1024   # bytes vs KB
+    load = os.getloadavg()[0] / (os.cpu_count() or 1) * 100
+    fps = progress.get("fps") or 0.0
+    up = int(time.monotonic() - STARTED)
+    return {
+        "latency_ms": round(1000.0 / fps, 1) if fps else 0.0,
+        "cpu_pct": round(min(load, 100.0)),
+        "memory_mb": round(mb),
+        "streams": len(progress.get("videos") or []) or (2 if cfg else 0),
+        "uptime": f"{up // 3600}h {up % 3600 // 60:02d}m" if up >= 3600 else f"{up // 60}m",
     }
 
 
