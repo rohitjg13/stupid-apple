@@ -94,14 +94,24 @@ def zones(floor=FLOOR):
     ]
 
 
-def tripwires(door_line=None):
-    """`door_line` is [[u1,v1],[u2,v2]] in full-res px, straight from the wizard."""
+IN_DIRS = ("up", "down", "left", "right")
+
+
+def tripwires(door_line=None, in_dir=None):
+    """`door_line` is [[u1,v1],[u2,v2]] in full-res px, straight from the wizard.
+
+    `in_dir` is which side of that line counts as walking *into* the store, in
+    image space ("up" is towards the top of the frame). Only the operator can
+    know it -- a camera behind the till and a camera facing it disagree -- so
+    the guess below is only a starting point the wizard can flip.
+    """
     p1, p2 = door_line or ([0, DEFAULT_DOOR_V], [FULL_W - 1, DEFAULT_DOOR_V])
     vertical = abs(p2[0] - p1[0]) < abs(p2[1] - p1[1])
+    if in_dir is not None and in_dir not in IN_DIRS:
+        raise ValueError(f"in_dir must be one of {IN_DIRS}, got {in_dir!r}")
     return [{"id": "door", "stream": "overhead",
              "p1": [int(p1[0]), int(p1[1])], "p2": [int(p2[0]), int(p2[1])],
-             # Entering means moving away from the camera-near edge the door sits on.
-             "in_dir": "right" if vertical else "up"}]
+             "in_dir": in_dir or ("right" if vertical else "up")}]
 
 
 def rois(rows=2, cols=3, margin=0.08, empty_below=60, low_below=110):
@@ -157,7 +167,7 @@ def planogram(roi_list, unit_price=50, sales_per_hour=5):
 
 def make_clipset(dest, overhead=(), shelf=(), store_id="demo-01", shelf_grid=(2, 3),
                  door_line=None, floor=FLOOR, counters=2, target_wait_s=180,
-                 lane_grid=(2, 8), zone_rects=None):
+                 lane_grid=(2, 8), zone_rects=None, door_dir=None):
     """Write a complete clipset folder and return its path.
 
     `overhead` and `shelf` are lists of video paths; several play back to back
@@ -193,7 +203,7 @@ def make_clipset(dest, overhead=(), shelf=(), store_id="demo-01", shelf_grid=(2,
     (dest / "store.yaml").write_text(yaml.safe_dump(store, sort_keys=False))
     _write(dest / "zones.json",
            zones_from_rects(zone_rects, floor) if zone_rects else zones(floor))
-    _write(dest / "tripwires.json", tripwires(door_line))
+    _write(dest / "tripwires.json", tripwires(door_line, door_dir))
     _write(dest / "rois.json", roi_list)
     _write(dest / "lanes.json", lanes(*lane_grid))
     _write(dest / "planogram.json", planogram(roi_list))

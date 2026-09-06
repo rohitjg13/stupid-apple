@@ -113,12 +113,41 @@ def test_an_empty_store_sells_nothing():
     assert not got.of("pos_txn")
 
 
-def test_a_quiet_lane_still_sells_once_somebody_is_in_the_store():
+def _exit(t):
+    return Event(t, CFG.store_id, "overhead", "door", "tripwire",
+                 {"dir": "out", "tripwire_id": "door"})
+
+
+def test_sales_follow_departures_and_never_outnumber_them():
+    """Conversion is txns/footfall; txns above footfall is a broken metric."""
     bus = Bus()
     got = Collector(bus)
     pipe = BackendPipeline(CFG, bus)
-    bus.publish(Event(1000.0, CFG.store_id, "overhead", None, "occupancy", {"count": 3}))
+    for i in range(40):
+        bus.publish(_exit(1000.0 + i))
     bus.drain()
-    drive(bus, pipe, [0] * 8, n=5)
 
-    assert got.of("pos_txn"), "conversion needs transactions from a quiet store too"
+    txns = got.of("pos_txn")
+    assert 0 < len(txns) < 40, "a departure buys something sometimes, not always"
+
+
+def test_nobody_leaving_means_nothing_sold():
+    bus = Bus()
+    got = Collector(bus)
+    drive(bus, BackendPipeline(CFG, bus), [0] * 8, n=40, dt=10.0)
+
+    assert not got.of("pos_txn")
+
+
+def test_calibrated_lanes_take_over_from_the_door():
+    """With real queue cells the lane drop is the signal; the door stands down."""
+    bus = Bus()
+    got = Collector(bus)
+    pipe = BackendPipeline(CFG, bus)
+    drive(bus, pipe, [95] * 8, n=4)                 # lanes read busy
+    assert pipe._lanes_live
+    for i in range(40):
+        bus.publish(_exit(2000.0 + i))
+    bus.drain()
+
+    assert not [e for e in got.of("pos_txn") if e.t >= 2000.0]

@@ -17,6 +17,22 @@
   let targetWait = $state(180);
   let backend = $state('');            // '' = let the box decide
   let door = $state([[0, 400], [639, 400]]);
+  // Which side of the line is "into the store". Only two of the four make
+  // sense for a given line, so the control is a flip, not a compass.
+  let doorFlip = $state(false);
+  let doorVertical = $derived(
+    Math.abs(door[1][0] - door[0][0]) < Math.abs(door[1][1] - door[0][1]),
+  );
+  let doorDir = $derived(doorVertical
+    ? (doorFlip ? 'left' : 'right')
+    : (doorFlip ? 'down' : 'up'));
+  // Image space: v grows downwards, so "up" is towards the top of the frame.
+  const IN_VECTOR = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+  let doorArrow = $derived.by(() => {
+    const [dx, dy] = IN_VECTOR[doorDir];
+    const mx = (door[0][0] + door[1][0]) / 2, my = (door[0][1] + door[1][1]) / 2;
+    return { x1: mx, y1: my, x2: mx + dx * 62, y2: my + dy * 62 };
+  });
   // The floor map. Rectangles on the overhead frame, because that is the thing
   // the operator can actually point at; the server turns them into metres.
   let zones = $state([
@@ -71,6 +87,7 @@
         shelf_rows: shelfRows, shelf_cols: shelfCols, counters,
         target_wait_s: targetWait, backend: backend || null,
         door_line: hasOverhead ? door : null,
+        door_dir: hasOverhead ? doorDir : null,
         zones: hasOverhead && zones.length ? zones : null,
         live: liveMode,
       });
@@ -238,12 +255,28 @@
               {/each}
               <line x1={door[0][0]} y1={door[0][1]} x2={door[1][0]} y2={door[1][1]}
                     stroke="var(--accent-red)" stroke-width="4" />
+              <defs>
+                <marker id="in-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                        markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent-red)" />
+                </marker>
+              </defs>
+              <line x1={doorArrow.x1} y1={doorArrow.y1} x2={doorArrow.x2} y2={doorArrow.y2}
+                    stroke="var(--accent-red)" stroke-width="4"
+                    marker-end="url(#in-arrow)" pointer-events="none" />
+              <text x={doorArrow.x2 + 10} y={doorArrow.y2 + 5} font-size="17"
+                    font-weight="700" fill="var(--accent-red)" pointer-events="none">IN</text>
               {#each door as p, i}
                 <circle cx={p[0]} cy={p[1]} r="12" fill="var(--accent-red)" role="button"
                         tabindex="0" aria-label="entry line end {i + 1}"
                         onpointerdown={(e) => grab('door', i, e)} style="cursor: grab" />
               {/each}
             </svg>
+          </div>
+          <div class="zone-rows">
+            <button class="link" onclick={() => (doorFlip = !doorFlip)}>
+              entry direction: {doorDir} — flip
+            </button>
           </div>
           <div class="zone-rows">
             {#each zones as z, i}
@@ -256,8 +289,9 @@
             <button class="link" onclick={addZone}>+ add zone</button>
           </div>
           <p class="hint">
-            Red line: crossing it counts as an entry or an exit. Blue boxes: the zones
-            dwell, the heatmap and conversion are reported against. No frame is stored.
+            Red line: crossing it counts as an entry or an exit, and the arrow is
+            the way that counts as coming <em>in</em>. Blue boxes: the zones dwell,
+            the heatmap and conversion are reported against. No frame is stored.
           </p>
         </div>
       {/if}

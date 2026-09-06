@@ -9,6 +9,13 @@ Wait is `count * service_s` -- one server per lane, Little's law -- not Erlang.
 Erlang C answers a different question (how many counters should be open), and
 that is what `staffing.staffing_advice` is used for below, once every
 `advice_period_s`, off the arrival rate measured from door tripwires.
+
+The POS is simulated and the deck has to say so. What it is *not* allowed to be
+is untethered: a transaction is a shopper leaving the checkout with something,
+so a simulated one follows an observed departure -- a lane's count dropping
+where the lanes are calibrated, otherwise a shopper crossing the door outbound,
+with probability `pos.conversion`. Sales on a timer sold to an empty shop and
+printed conversion rates over 100%.
 """
 from __future__ import annotations
 
@@ -45,14 +52,14 @@ class BackendPipeline:
         self.service_s = float(cfg.checkout.get("service_s", 45.0))
 
         self.pos = PosStub(cfg, seed=seed) if cfg.planogram else None
+        self.buy_rate = float(cfg.pos.get("conversion", 0.35))
+        self._lanes_live = False        # true once a lane cell ever reads busy
         self.alerts = Alerts(cfg, bus)
         bus.subscribe("*", self.alerts.on_event)
         bus.subscribe("tripwire", self._on_tripwire)
-        bus.subscribe("occupancy", self._on_occupancy)
 
         self._count = {}                                # lane -> smoothed headcount
         self._arrivals = []                             # entry times, trimmed
-        self._occupancy = 0                             # nobody in, nobody buying
         self._last = -1e9
         self._last_advice = -1e9
 
@@ -60,9 +67,12 @@ class BackendPipeline:
     def _on_tripwire(self, event):
         if event.payload["dir"] == "in":
             self._arrivals.append(event.t)
-
-    def _on_occupancy(self, event):
-        self._occupancy = int(event.payload["count"])
+        elif (event.payload["dir"] == "out" and self.pos is not None
+              and not self._lanes_live and self.pos.rng.random() < self.buy_rate):
+            # Whoever just left either bought something or did not. With real
+            # lane cells the drop in `on_count` is the better signal and this
+            # stands down, so a departure is never counted twice.
+            self.bus.publish(self.pos.txn(event.t, lane=1))
 
     def _lambda(self, t):
         """Entries per second over the last LAMBDA_WINDOW_S."""
@@ -88,6 +98,7 @@ class BackendPipeline:
 
             count = ema(self._count.get(lane), naive_count(cells))
             self._count[lane] = count
+            self._lanes_live = self._lanes_live or count > 0.5
             self._publish(t, "queue_estimate",
                           {"lane": lane, "count": round(count, 2),
                            "pred_wait_s": round(count * self.service_s, 1)})
@@ -96,14 +107,6 @@ class BackendPipeline:
                 txn = self.pos.on_count(t, lane, count)
                 if txn is not None:
                     self.bus.publish(txn)
-
-        if self.pos is not None and self._occupancy > 0:
-            # A quiet lane still sells things, so the stub ticks over even when
-            # no queue is visible -- but only while somebody is actually in the
-            # store. Selling to an empty shop put purchases above footfall and
-            # printed conversion rates over 100%.
-            for txn in self.pos.idle_tick(t, lanes=tuple(sorted(self.lanes))):
-                self.bus.publish(txn)
 
         self._advise(t)
 
