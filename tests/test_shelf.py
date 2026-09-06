@@ -116,3 +116,39 @@ def test_shelf_pipeline_end_to_end():
     assert "stockout_start" in types
     assert "alert" in types
     assert "planogram_violation" in types
+
+
+# ---- one incident per empty facing ----------------------------------------
+
+def _empty_then_full(pipeline, rois, t0=0.0):
+    """Drive the pipeline with every facing empty, then every facing stocked."""
+    import numpy as np
+    from pl.contract import FRAME_RESULT_DT
+    out = []
+    for i, fill in enumerate([5] * 12 + [220] * 12):
+        r = np.zeros(1, dtype=FRAME_RESULT_DT)[0]
+        r["roi_fill"][: len(rois)] = fill
+        pipeline.process_frame(t=t0 + i, result=r)
+    return out
+
+
+def test_two_detectors_open_one_stockout(tmp_path):
+    from core.bus import Bus
+    from shelf.pipeline import ShelfPipeline
+
+    rois = [{"id": "A1", "stream": "shelf", "x": 10, "y": 10, "w": 40, "h": 40,
+             "empty_below": 60, "low_below": 110}]
+    plan = [{"facing": "A1", "sku": "S1", "name": "One", "unit_price": 10,
+             "expected_sales_per_hour": 4}]
+    bus = Bus()
+    seen = []
+    bus.subscribe("*", seen.append)
+    pipe = ShelfPipeline(rois=rois, planogram=plan, bus=bus, use_detector=False)
+    _empty_then_full(pipe, rois)
+    bus.drain()
+
+    starts = [e for e in seen if e.event_type == "stockout_start"]
+    assert len(starts) == 1, "fill and item count both saw the same empty shelf"
+    alerts = [e for e in seen if e.event_type == "alert"
+              and e.payload["rule"] == "stockout_detected"]
+    assert len(alerts) == 1

@@ -256,7 +256,9 @@ def _heatmap_grid(tiles):
         i = min(HEATMAP_H - 1, max(0, cy)) * HEATMAP_W + min(HEATMAP_W - 1, max(0, cx))
         grid[i] += t["count"]
     top = max(grid) or 1.0
-    return [round(v / top, 3) for v in grid]
+    # sqrt, not linear: one aisle end always dominates a floor heatmap, and a
+    # linear scale renders everywhere else as the same near-black blue.
+    return [round((v / top) ** 0.5, 3) for v in grid]
 
 
 def _spark(t0, t1, run_id, buckets=12):

@@ -13,6 +13,9 @@ from shelf.pick_detector import ShelfPickDetector
 
 log = logging.getLogger("shelf.pipeline")
 
+# Both trackers below raise these for the same physical shelf.
+STOCKOUT_RULES = ("stockout_detected", "low_stock_detected")
+
 class ShelfPipeline:
     def __init__(
         self,
@@ -34,6 +37,8 @@ class ShelfPipeline:
         self._roi_index = {r["id"]: i for i, r in enumerate(rois)}
         self._rois_raw = rois
         self._last_active_picks: List[Any] = []
+        self._open_stockouts = set()        # facing -> one incident at a time
+        self._alerted = set()               # (facing, rule) already raised
 
     def process_frame(
         self,
@@ -105,12 +110,42 @@ class ShelfPipeline:
 
         pl_events = self.planogram_auditor.audit_facings(t, readings, detected_skus=det_skus)
 
-        # Publish events to bus
+        events = self._one_incident(so_events + inv_events + pl_events, readings)
         if self.bus is not None:
-            for ev in so_events + inv_events + pl_events:
+            for ev in events:
                 self.bus.publish(ev)
 
         return readings
+
+    def _one_incident(self, events, readings):
+        """One empty shelf is one incident, however many detectors noticed.
+
+        `ShelfFillMonitor` watches edge density and `InventoryTracker` watches
+        the item count; both fire on the same facing when it empties. Passing
+        both through opens two rows in the stockout table, doubles the lost
+        revenue, and prints the alert twice on the dashboard.
+        """
+        for facing, reading in readings.items():
+            if reading.status == ShelfStatus.NORMAL:      # restocked: arm it again
+                self._alerted -= {(facing, rule) for rule in STOCKOUT_RULES}
+
+        out = []
+        for ev in events:
+            facing = ev.zone_id
+            if ev.event_type == "stockout_start":
+                if facing in self._open_stockouts:
+                    continue
+                self._open_stockouts.add(facing)
+            elif ev.event_type == "stockout_end":
+                if facing not in self._open_stockouts:
+                    continue
+                self._open_stockouts.discard(facing)
+            elif ev.event_type == "alert" and ev.payload.get("rule") in STOCKOUT_RULES:
+                if (facing, ev.payload["rule"]) in self._alerted:
+                    continue
+                self._alerted.add((facing, ev.payload["rule"]))
+            out.append(ev)
+        return out
 
     def register_manual_removal(self, t: float, facing: str, quantity: int = 1) -> List[Event]:
         events = self.inventory_tracker.register_removal(t=t, facing=facing, quantity=quantity)
