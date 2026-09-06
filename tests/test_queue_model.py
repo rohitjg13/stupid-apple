@@ -143,3 +143,247 @@ def test_staffing_advice_only_adds_capacity():
     assert a is not None and a["open"] == 2
     # current 2 already open -> no advice
     assert staffing_advice(2, 0.9, 0.7, 60.0) is None
+
+
+# ---- cells_by_lane: FrameResult.lane_occupancy -> per-lane 16-cell lists ----
+
+def test_cells_by_lane_splits_the_hardware_array():
+    from backend.queue_model import cells_by_lane
+    from core.config import load_clipset
+    cfg = load_clipset("config/sim")
+    # lanes.json is L1C0..L1C3 then L2C0..L2C3, in hardware table order.
+    out = cells_by_lane(cfg.lanes, list(range(16)))
+    assert out[1] == [0, 1, 2, 3] + [0] * 12
+    assert out[2] == [4, 5, 6, 7] + [0] * 12
+
+
+def test_cells_by_lane_always_returns_sixteen_cells():
+    from backend.queue_model import cells_by_lane
+    table = [{"lane": 1, "cell": 0}, {"lane": 1, "cell": 2}]
+    out = cells_by_lane(table, [80, 90])
+    assert len(out[1]) == 16
+    assert out[1][0] == 80 and out[1][2] == 90 and out[1][1] == 0
+
+
+def test_cells_by_lane_ignores_cells_past_the_hardware_array():
+    from backend.queue_model import cells_by_lane
+    table = [{"lane": 1, "cell": 0}, {"lane": 2, "cell": 0}]
+    assert cells_by_lane(table, [50]) == {1: [50] + [0] * 15}
+
+
+# ---- QueueEngine -----------------------------------------------------------
+
+def _engine(**kw):
+    from backend.queue_model import QueueEngine
+    return QueueEngine(**kw)
+
+
+def test_engine_uses_the_naive_rule_before_a_fit():
+    e = _engine()
+    cells = [90, 90, 90, 10] + [0] * 12
+    assert e.raw_count(cells) == pytest.approx(0.8 * 3)
+
+
+def test_engine_uses_the_regression_once_fitted():
+    e = _engine()
+    # counts are exactly sum(cells)/100, so a = 0.01, b = 0
+    sums = [100.0, 200.0, 300.0]
+    truths = [1.0, 2.0, 3.0]
+    a, b, r2, mae = e.fit(sums, truths)
+    assert a == pytest.approx(0.01) and r2 == pytest.approx(1.0) and mae == pytest.approx(0.0)
+    assert e.raw_count([50] * 4 + [0] * 12) == pytest.approx(2.0)
+
+
+def test_engine_smooths_the_count_with_an_ema():
+    e = _engine(alpha=0.5)
+    full = [100] * 16
+    first = e.on_lane_occ(0.0, 1, [0] * 16)
+    second = e.on_lane_occ(1.0, 1, full)
+    assert first == 0.0
+    # naive_count of a full lane is 0.8*16 = 12.8; EMA at alpha 0.5 from 0.
+    assert second == pytest.approx(6.4)
+
+
+def test_engine_counts_a_lengthening_lane_as_an_arrival():
+    """An empty lane filling up is arrivals — one per person, not per sample."""
+    e = _engine()
+    e.on_lane_occ(0.0, 1, [0] * 16)
+    e.on_lane_occ(1.0, 1, [90] * 16)
+    e.on_lane_occ(2.0, 1, [90] * 16)      # still rising under the EMA
+    # naive_count of a full lane is 12.8; the EMA climbs 0 -> 3.8 -> 6.5, so
+    # the whole-number count crosses 6 boundaries in total.
+    assert len(e._arrivals) == 6
+    assert int(e.counts[1]) == 6
+
+
+def test_engine_mu_is_one_over_mean_inter_departure_time():
+    e = _engine()
+    for t in (0.0, 20.0, 40.0):
+        e.on_departure(t, 1)
+    assert e.mu(1) == pytest.approx(1 / 20.0)
+
+
+def test_engine_mu_falls_back_to_a_default_before_any_pos_data():
+    from backend.queue_model import QueueEngine
+    e = _engine()
+    assert e.mu(1) == pytest.approx(QueueEngine.DEFAULT_MU_PER_S)
+
+
+def test_engine_publishes_every_two_seconds():
+    e = _engine()
+    assert e.due(0.0) is True
+    e.estimates(0.0)
+    assert e.due(1.0) is False
+    assert e.due(2.0) is True
+
+
+def test_engine_estimate_payload_matches_the_frozen_contract():
+    from core.events import Event
+    e = _engine()
+    e.on_lane_occ(0.0, 1, [90] * 16)
+    est = e.estimates(1.0)
+    assert len(est) == 1
+    # The payload must construct a valid Event: exact keys, nothing invented.
+    Event(1.0, "demo-01", "overhead", None, "queue_estimate", est[0])
+
+
+def test_engine_wait_takes_the_max_of_model_and_naive():
+    """A visibly long queue never reports a two-second wait."""
+    e = _engine(counters=2)
+    for t in (0.0, 10.0, 20.0):
+        e.on_departure(t, 1)              # mu = 0.1/s
+    e.on_lane_occ(0.0, 1, [100] * 16)     # naive count 12.8 -> 12.8/0.1 = 128 s
+    est = e.estimates(30.0)[0]
+    assert est["pred_wait_s"] >= 100.0
+
+
+def test_engine_never_publishes_an_infinite_wait():
+    e = _engine(counters=1)
+    for t in range(0, 200, 2):
+        e.on_arrival(float(t))            # lambda far above mu -> saturated
+    e.on_lane_occ(0.0, 1, [90] * 16)
+    est = e.estimates(200.0)[0]
+    assert math.isfinite(est["pred_wait_s"])
+
+
+def test_engine_reports_a_lane_per_row_sorted():
+    e = _engine()
+    e.on_lane_occ(0.0, 2, [90] * 16)
+    e.on_lane_occ(0.0, 1, [90] * 16)
+    assert [r["lane"] for r in e.estimates(1.0)] == [1, 2]
+
+
+def test_engine_trims_arrivals_to_the_ten_minute_window():
+    from backend.queue_model import QueueEngine
+    e = _engine()
+    e.on_arrival(0.0)
+    e.on_arrival(1.0)
+    e.on_arrival(QueueEngine.LAMBDA_WINDOW_S + 100.0)
+    assert len(e._arrivals) == 1
+
+
+def test_engine_projects_lambda_forward_when_it_is_rising():
+    e = _engine()
+    e._lambda_series = [0.1, 0.2, 0.3, 0.4, 0.5]
+    assert e.projected_lambda(0.0) > 0.5
+
+
+def test_engine_projection_never_goes_negative():
+    e = _engine()
+    e._lambda_series = [0.5, 0.4, 0.3, 0.2, 0.1]
+    assert e.projected_lambda(0.0) >= 0.0
+
+
+def test_engine_advice_asks_for_a_counter_before_the_peak():
+    """Rising arrivals must trigger the advice on the *projection*, not on the
+    rate as it stands, which is the whole point of the Holt step."""
+    e = _engine(counters=1, target_wait_s=30.0)
+    for t in (0.0, 10.0, 20.0):
+        e.on_departure(t, 1)              # mu = 0.1/s
+    e._lambda_series = [0.01, 0.03, 0.05, 0.07]
+    advice = e.advice(30.0)
+    assert advice is not None and advice["open"] >= 2
+
+
+def test_engine_advice_is_none_when_one_counter_copes():
+    e = _engine(counters=2, target_wait_s=600.0)
+    e._lambda_series = [0.001, 0.001]
+    assert e.advice(10.0) is None
+
+
+# ---- arrivals are whole people, not EMA wobble -----------------------------
+
+def test_a_wobbling_count_is_not_a_stream_of_arrivals():
+    """Regression: on real footage the smoothed count jitters every sample.
+    Counting each uptick as an arrival read 120 arrivals/min off a 45 s clip
+    and asked for sixteen counters."""
+    e = _engine()
+    e.a, e.b = 1.0, 0.0                   # count == sum(cells), for a clean test
+    for i in range(40):
+        # Hovers around two people, never crossing to three.
+        e.on_lane_occ(float(i), 1, [2 if i % 2 else 1] + [0] * 15)
+    assert e.counts[1] < 3.0
+    assert len(e._arrivals) <= 2, f"{len(e._arrivals)} arrivals from a flat queue"
+
+
+def test_a_whole_person_joining_is_an_arrival():
+    e = _engine(alpha=1.0)                # no smoothing, so levels move at once
+    e.a, e.b = 1.0, 0.0
+    e.on_lane_occ(0.0, 1, [1] + [0] * 15)
+    before = len(e._arrivals)
+    e.on_lane_occ(1.0, 1, [2] + [0] * 15)
+    e.on_lane_occ(2.0, 1, [3] + [0] * 15)
+    assert len(e._arrivals) == before + 2
+
+
+def test_a_jump_of_two_counts_two_arrivals():
+    e = _engine(alpha=1.0)
+    e.a, e.b = 1.0, 0.0
+    e.on_lane_occ(0.0, 1, [1] + [0] * 15)
+    e.on_lane_occ(1.0, 1, [4] + [0] * 15)
+    assert len(e._arrivals) == 3
+
+
+def test_a_shrinking_queue_is_never_an_arrival():
+    e = _engine(alpha=1.0)
+    e.a, e.b = 1.0, 0.0
+    for v in (5, 4, 3, 2, 1, 0):
+        e.on_lane_occ(float(v), 1, [v] + [0] * 15)
+    assert e._arrivals == []
+
+
+def test_lambda_stays_sane_on_a_flat_queue():
+    """The number that drove the bogus staffing alert."""
+    e = _engine()
+    e.a, e.b = 1.0, 0.0
+    for i in range(120):                  # 60 s of 2 Hz lane_occ
+        e.on_lane_occ(i * 0.5, 1, [3 if i % 3 else 2] + [0] * 15)
+    assert e.lambda_rate(60.0) * 60 < 5.0, "lambda should not track the sample rate"
+
+
+def test_lambda_is_not_extrapolated_from_a_two_second_window():
+    """Regression: the first seconds after warm-up produced lambda=60/min and
+    an 'open counter 16' alert before anyone had actually queued."""
+    from backend.queue_model import QueueEngine
+    e = _engine()
+    for i in range(6):
+        e.on_arrival(float(i) * 0.3)      # 6 arrivals inside two seconds
+    lam = e.lambda_rate(2.0)
+    assert lam == pytest.approx(6.0 / QueueEngine.MIN_LAMBDA_WINDOW_S)
+    assert lam * 60 <= 6.0
+
+
+def test_lambda_uses_the_real_window_once_it_is_long_enough():
+    e = _engine()
+    for i in range(10):
+        e.on_arrival(float(i) * 12.0)     # 10 arrivals over 108 s
+    assert e.lambda_rate(120.0) == pytest.approx(10.0 / 120.0, rel=0.15)
+
+
+def test_no_staffing_panic_in_the_first_seconds():
+    e = _engine(counters=1, target_wait_s=180.0)
+    for i in range(8):
+        e.on_arrival(float(i) * 0.25)
+        e.on_departure(float(i) * 0.25, 1)
+    advice = e.advice(2.0)
+    assert advice is None or advice["open"] <= 2
