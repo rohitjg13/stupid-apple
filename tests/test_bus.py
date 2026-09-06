@@ -82,3 +82,18 @@ def test_publish_is_thread_safe():
     for t in threads: t.join()
     bus.drain()
     assert len(seen) == 400
+
+
+def test_drain_waits_for_events_a_subscriber_publishes():
+    """backend/alerts.py publishes from inside a subscriber; one join pass
+    joins the collector's queue before the derived event even exists."""
+    bus = Bus()
+    seen = []
+    bus.subscribe("occupancy", lambda e: seen.append(e))
+    bus.subscribe("tripwire", lambda e: bus.publish(
+        Event(e.t, "s", "overhead", None, "occupancy", {"count": 1})))
+    bus.publish(Event(0.0, "s", "overhead", "door", "tripwire",
+                      {"dir": "in", "tripwire_id": "door"}))
+    bus.drain()
+    assert len(seen) == 1
+

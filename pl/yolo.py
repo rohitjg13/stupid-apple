@@ -24,6 +24,7 @@ without them installed.
 from __future__ import annotations
 
 import logging
+import os
 
 import numpy as np
 
@@ -33,6 +34,8 @@ from pl.reference import FULL_H, FULL_W, ReferenceBackend, letterbox
 log = logging.getLogger(__name__)
 
 PERSON = 0                      # COCO class id
+# The board is offline: point this at a .pt already on disk.
+DEFAULT_MODEL = os.environ.get("RETAIL_YOLO_MODEL", "yolov8n.pt")
 
 
 def available() -> bool:
@@ -74,7 +77,7 @@ def pack_detections(result, boxes):
 class YoloBackend:
     """Drop-in for pl.driver / pl.reference: process(image, stream_id, frame_id)."""
 
-    def __init__(self, cfg, model="yolov8n.pt", conf=0.3, device=None,
+    def __init__(self, cfg, model=DEFAULT_MODEL, conf=0.3, device=None,
                  detector=None, reference=None):
         self.cfg = cfg
         self.conf = float(conf)
@@ -90,7 +93,15 @@ class YoloBackend:
         if self._model is not None:
             return self._model
         from ultralytics import YOLO
-        self._model = YOLO(self.model_name)
+        try:
+            self._model = YOLO(self.model_name)
+        except Exception as e:
+            # Ultralytics downloads unknown names, which a store with no network
+            # cannot do. Say so instead of surfacing a connection error.
+            raise RuntimeError(
+                f"cannot load YOLO weights {self.model_name!r}: {e}. Download the "
+                f".pt once on a machine with a network and set RETAIL_YOLO_MODEL "
+                f"to its path, or run with --backend reference") from e
         if self.device is None:
             try:
                 import torch

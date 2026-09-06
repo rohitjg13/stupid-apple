@@ -110,6 +110,7 @@ class BackendPipeline:
             return
         self._publish(t, "alert",
                       {"severity": "warning", "rule": "open_counter",
-                       "message": f"open counter {advice['open']} — "
-                                  f"{advice['lambda_per_min']}/min arriving, projected wait "
+                       "message": f"congestion predicted: open {advice['open']} counters "
+                                  f"(now {self.counters}) — {advice['lambda_per_min']}/min "
+                                  f"arriving, projected wait "
                                   f"{advice['projected_wait_s']:.0f}s"})

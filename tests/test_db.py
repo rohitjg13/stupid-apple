@@ -110,3 +110,16 @@ def test_writer_raises_on_bad_statement_and_survives(db):
     # A subsequent valid write still lands after a rollback.
     db.insert("occupancy", {"run_id": "r1", "t": 1.0, "count": 9}).drain()
     assert db.query_one("SELECT count FROM occupancy")["count"] == 9
+
+
+def test_one_bad_statement_does_not_discard_the_batch(tmp_path):
+    """A batch is up to 500 rows; losing all of them to one bad row is not on."""
+    db = DB(tmp_path / "r.db", batch_interval_s=0.01)
+    db.insert("occupancy", {"run_id": "r1", "t": 1.0, "count": 1})
+    db.enqueue("INSERT INTO nope (x) VALUES (?)", (1,))
+    db.insert("occupancy", {"run_id": "r1", "t": 2.0, "count": 2})
+    with pytest.raises(sqlite3.Error):
+        db.drain()                       # the failure is still reported...
+    assert db.query_one("SELECT COUNT(*) AS n FROM occupancy")["n"] == 2   # ...not hidden
+    assert db.dropped == 1
+    db.close()

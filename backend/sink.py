@@ -47,9 +47,16 @@ class Sink:
                                      "zone": z, "t_enter": p["t_enter"],
                                      "t_exit": p["t_exit"]})
         elif et == "heatmap":
+            # shopper/heatmap.py publishes the running total every 10 s while
+            # t_bucket is the minute, so six events share a primary key and the
+            # last one -- the largest total -- is the truth. A plain INSERT
+            # raises and takes the whole batch's other rows down with it.
             for gx, gy, count in p["tiles"]:
-                self.db.insert("heatmap", {"run_id": rid, "t_bucket": p["t_bucket"],
-                                           "gx": gx, "gy": gy, "count": count})
+                self.db.enqueue(
+                    "INSERT INTO heatmap (run_id, t_bucket, gx, gy, count) "
+                    "VALUES (?, ?, ?, ?, ?) ON CONFLICT(run_id, t_bucket, gx, gy) "
+                    "DO UPDATE SET count = excluded.count",
+                    (rid, p["t_bucket"], gx, gy, count))
         elif et == "shelf_fill":
             self.db.insert("shelf_fill", {"run_id": rid, "t": t, "roi": z,
                                           "fill": p["fill"]})

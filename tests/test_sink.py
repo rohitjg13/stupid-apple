@@ -137,3 +137,24 @@ def test_no_drops_under_load(sink):
         sink.on_event(ev(float(i), "occupancy", {"count": i}, "overhead"))
     sink.drain()
     assert sink.db.query_one("SELECT COUNT(*) AS n FROM occupancy")["n"] == 500
+
+
+def test_repeated_heatmap_buckets_replace_rather_than_collide(sink):
+    """shopper/heatmap.py publishes the running total every 10 s but buckets by
+    the minute, so the same primary key arrives six times a bucket."""
+    sink.on_event(ev(0, "heatmap", {"t_bucket": 5, "tiles": [[1, 2, 3]]}, "overhead"))
+    sink.on_event(ev(10, "heatmap", {"t_bucket": 5, "tiles": [[1, 2, 9]]}, "overhead"))
+    sink.db.drain()
+    rows = sink.db.query("SELECT gx, gy, count FROM heatmap")
+    assert rows == [{"gx": 1, "gy": 2, "count": 9}]
+
+
+def test_a_colliding_heatmap_row_does_not_lose_the_events_around_it(sink):
+    """One integrity error used to roll back the whole 500-row batch."""
+    sink.on_event(ev(1, "tripwire", {"dir": "in", "tripwire_id": "door"}, "overhead"))
+    sink.on_event(ev(2, "heatmap", {"t_bucket": 1, "tiles": [[0, 0, 1]]}, "overhead"))
+    sink.on_event(ev(3, "heatmap", {"t_bucket": 1, "tiles": [[0, 0, 4]]}, "overhead"))
+    sink.on_event(ev(4, "occupancy", {"count": 7}, "overhead"))
+    sink.db.drain()
+    assert sink.db.query_one("SELECT COUNT(*) AS n FROM tripwire")["n"] == 1
+    assert sink.db.query_one("SELECT COUNT(*) AS n FROM occupancy")["n"] == 1

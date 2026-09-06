@@ -1,119 +1,95 @@
 <script>
   import { onMount } from 'svelte';
+  import Wizard from './lib/Wizard.svelte';
+  import { clockOf, del, fmtDuration, fmtWait, get } from './lib/api.js';
 
-  // ─── Reactive state ───
+  // ─── State: one document from /api/dashboard, polled ───
+  let view = $state('loading');        // loading | wizard | dashboard
+  let runs = $state([]);
+  let runId = $state(null);
+  let d = $state(null);
+  let error = $state(null);
   let currentTime = $state('');
-  let activeTab = $state('live');
 
-  // ─── Fake live data (simulated) ───
-  let occupancy = $state(17);
-  let entriesTotal = $state(342);
-  let exitsTotal = $state(298);
-  let avgDwell = $state(4.2);
-  let queueCount1 = $state(5);
-  let queueCount2 = $state(3);
-  let queueWait1 = $state(142);
-  let queueWait2 = $state(88);
-  let fps = $state(14.8);
-  let plLatency = $state(4.8);
-  let conversionRate = $state(12.4);
-  let lostRevenue = $state(1260);
+  const POLL_MS = 2000;
 
-  // Footfall sparkline data (last 12 intervals)
-  let footfallSpark = $state([12, 18, 15, 22, 28, 25, 19, 31, 27, 23, 20, 17]);
-
-  // Hourly footfall chart
-  let hourlyFootfall = $state([
-    { h: '9', v: 22 }, { h: '10', v: 38 }, { h: '11', v: 52 },
-    { h: '12', v: 67 }, { h: '13', v: 58 }, { h: '14', v: 45 },
-    { h: '15', v: 61 }, { h: '16', v: 54 }, { h: '17', v: 42 },
-    { h: '18', v: 35 },
-  ]);
-
-  // Zone dwell (seconds) 
-  let zoneDwell = $state([
-    { name: 'Entrance', dwell: 8, count: 5 },
-    { name: 'Aisle 1', dwell: 45, count: 3 },
-    { name: 'Aisle 2', dwell: 62, count: 4 },
-    { name: 'Aisle 3', dwell: 28, count: 2 },
-    { name: 'Checkout', dwell: 95, count: 6 },
-  ]);
-
-  // Shelf ROI fills (8x4 = 32 facings)
-  let shelfFills = $state(generateShelfData());
-
-  // Alerts
-  let alerts = $state([
-    { severity: 'critical', rule: 'stockout', message: 'Stock-out: MAGGI-70G at facing A3', time: '18:28:04', stream: 'shelf' },
-    { severity: 'warning', rule: 'queue', message: 'Lane 1 wait exceeds 2min — open counter 2?', time: '18:27:32', stream: 'overhead' },
-    { severity: 'info', rule: 'occupancy', message: 'Occupancy exceeded 15 in Zone Aisle 2', time: '18:26:11', stream: 'overhead' },
-    { severity: 'warning', rule: 'planogram', message: 'Planogram violation: A5 expected LAYS-50G, observed empty', time: '18:25:47', stream: 'shelf' },
-    { severity: 'critical', rule: 'stockout', message: 'Stock-out: DAIRY-MILK-38G at facing B2', time: '18:24:19', stream: 'shelf' },
-    { severity: 'info', rule: 'conversion', message: 'Conversion rate dropped below 10% in last 15min', time: '18:23:05', stream: '-' },
-  ]);
-
-  // Heatmap grid (16x12)
-  let heatmapData = $state(generateHeatmap());
-
-  // Conversion funnel
-  let funnel = $state([
-    { label: 'Footfall', value: 342, pct: 100 },
-    { label: 'Browsed', value: 218, pct: 63.7 },
-    { label: 'Picked up', value: 89, pct: 26.0 },
-    { label: 'Purchased', value: 42, pct: 12.3 },
-  ]);
-
-  // Stock-out table
-  let stockouts = $state([
-    { facing: 'A3', sku: 'MAGGI-70G', duration: '12m 04s', revenue: '₹504', status: 'active' },
-    { facing: 'B2', sku: 'DAIRY-MILK-38G', duration: '8m 31s', revenue: '₹380', status: 'active' },
-    { facing: 'C1', sku: 'LAYS-CLASSIC-50G', duration: '—', revenue: '₹0', status: 'resolved' },
-  ]);
-
-  function generateShelfData() {
-    const ids = [];
-    for (let row = 0; row < 4; row++) {
-      for (let col = 0; col < 8; col++) {
-        const label = String.fromCharCode(65 + row) + (col + 1);
-        const fill = Math.random();
-        let state;
-        if (fill > 0.7) state = 'full';
-        else if (fill > 0.4) state = 'partial';
-        else if (fill > 0.15) state = 'low';
-        else state = 'empty';
-        ids.push({ id: label, fill: Math.round(fill * 255), state });
-      }
+  async function refresh() {
+    try {
+      d = await get(`/api/dashboard${runId ? `?run_id=${runId}` : ''}`);
+      runId = d.run_id ?? runId;
+      error = null;
+    } catch (e) {
+      error = e.message;
     }
-    // Force a couple stockouts for realism
-    ids[2].state = 'empty'; ids[2].fill = 12;
-    ids[9].state = 'empty'; ids[9].fill = 8;
-    ids[18].state = 'low';  ids[18].fill = 45;
-    return ids;
   }
 
-  function generateHeatmap() {
-    const cells = [];
-    for (let y = 0; y < 12; y++) {
-      for (let x = 0; x < 16; x++) {
-        // Simulate hot spots near entrance (bottom-center) and aisles
-        let heat = 0;
-        // entrance hotspot
-        const dx1 = x - 8, dy1 = y - 11;
-        heat += Math.max(0, 1 - Math.sqrt(dx1*dx1 + dy1*dy1) / 5);
-        // aisle 2 hotspot
-        const dx2 = x - 5, dy2 = y - 5;
-        heat += Math.max(0, 0.8 - Math.sqrt(dx2*dx2 + dy2*dy2) / 4);
-        // checkout hotspot
-        const dx3 = x - 13, dy3 = y - 3;
-        heat += Math.max(0, 0.6 - Math.sqrt(dx3*dx3 + dy3*dy3) / 3);
-        // Add some noise
-        heat += (Math.random() - 0.5) * 0.15;
-        heat = Math.max(0, Math.min(1, heat));
-        cells.push(heat);
-      }
+  async function loadRuns() {
+    try {
+      runs = await get('/api/runs');
+    } catch (e) {
+      runs = [];
     }
-    return cells;
   }
+
+  async function onDone(id) {
+    runId = id;
+    await Promise.all([loadRuns(), refresh()]);
+    view = 'dashboard';
+  }
+
+  async function dropRun() {
+    if (!runId) return;
+    await del(`/api/runs/${runId}`).catch((e) => (error = e.message));
+    runId = null;
+    d = null;
+    await loadRuns();
+    view = runs.length ? 'dashboard' : 'wizard';
+    if (view === 'dashboard') refresh();
+  }
+
+  onMount(() => {
+    const clock = setInterval(
+      () => (currentTime = new Date().toLocaleTimeString('en-IN', { hour12: false })), 1000);
+    currentTime = new Date().toLocaleTimeString('en-IN', { hour12: false });
+
+    loadRuns().then(async () => {
+      if (!runs.length) return (view = 'wizard');
+      await refresh();
+      view = d?.run_id ? 'dashboard' : 'wizard';
+    });
+
+    const tick = setInterval(() => view === 'dashboard' && refresh(), POLL_MS);
+    return () => { clearInterval(clock); clearInterval(tick); };
+  });
+
+  // ─── Derived: the tiles, straight off the document ───
+  let occupancy = $derived(d?.occupancy ?? 0);
+  let entriesTotal = $derived(d?.entries ?? 0);
+  let exitsTotal = $derived(d?.exits ?? 0);
+  let netOccupancy = $derived(entriesTotal - exitsTotal);
+  let avgDwell = $derived(((d?.avg_dwell_s ?? 0) / 60).toFixed(1));
+  let conversionRate = $derived(d?.conversion_rate ?? 0);
+  let lostRevenue = $derived(Math.round(d?.lost_revenue ?? 0));
+  let footfallSpark = $derived(d?.footfall_spark ?? new Array(12).fill(0));
+  let hourlyFootfall = $derived((d?.footfall_hourly ?? []).map((h) => ({ h: h.hour, v: h.entries })));
+  let zoneDwell = $derived((d?.zones ?? []).map((z) => ({
+    name: z.name ?? '—', count: z.visits ?? 0, dwell: Math.round(z.median_dwell_s ?? 0),
+  })));
+  let queue = $derived(d?.queue ?? []);
+  let shelfFills = $derived(d?.shelf ?? []);
+  let stockouts = $derived(d?.stockouts ?? []);
+  let alerts = $derived(d?.alerts ?? []);
+  let heatmapData = $derived(d?.heatmap ?? new Array(192).fill(0));
+  let funnel = $derived(d?.funnel ?? []);
+  let running = $derived(d?.state === 'running');
+
+  let maxFootfall = $derived(Math.max(...footfallSpark, 1));
+  let maxHourly = $derived(Math.max(...hourlyFootfall.map((h) => h.v), 1));
+  let peakHour = $derived(hourlyFootfall.reduce((a, b) => (b.v > (a?.v ?? -1) ? b : a), null));
+  let avgHour = $derived(hourlyFootfall.length
+    ? (hourlyFootfall.reduce((s, h) => s + h.v, 0) / hourlyFootfall.length).toFixed(1) : '0');
+  let maxQueue = $derived(Math.max(...queue.map((q) => q.count), 4));
+  let targetWait = $derived(d?.target_wait_s ?? 180);
 
   function heatColor(value) {
     if (value < 0.1) return 'rgba(59, 130, 246, 0.05)';
@@ -122,91 +98,6 @@
     if (value < 0.75) return `rgba(245, 158, 11, ${0.3 + value * 0.5})`;
     return `rgba(239, 68, 68, ${0.5 + value * 0.4})`;
   }
-
-  function formatWait(seconds) {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${String(s).padStart(2, '0')}`;
-  }
-
-  // ─── Live update simulation ───
-  onMount(() => {
-    // Clock
-    const clockInterval = setInterval(() => {
-      currentTime = new Date().toLocaleTimeString('en-IN', { hour12: false });
-    }, 1000);
-    currentTime = new Date().toLocaleTimeString('en-IN', { hour12: false });
-
-    // Simulate data changes every 2 seconds
-    const dataInterval = setInterval(() => {
-      // Jitter occupancy
-      occupancy = Math.max(3, Math.min(30, occupancy + Math.floor(Math.random() * 5) - 2));
-      
-      // Sometimes add an entry or exit
-      if (Math.random() > 0.5) entriesTotal += 1;
-      if (Math.random() > 0.6) exitsTotal += 1;
-
-      // Jitter dwell
-      avgDwell = Math.round((avgDwell + (Math.random() - 0.5) * 0.6) * 10) / 10;
-      avgDwell = Math.max(1.5, Math.min(8, avgDwell));
-
-      // Queue jitter
-      queueCount1 = Math.max(0, Math.min(10, queueCount1 + Math.floor(Math.random() * 3) - 1));
-      queueCount2 = Math.max(0, Math.min(8, queueCount2 + Math.floor(Math.random() * 3) - 1));
-      queueWait1 = Math.max(30, Math.min(240, queueWait1 + Math.floor(Math.random() * 21) - 10));
-      queueWait2 = Math.max(20, Math.min(180, queueWait2 + Math.floor(Math.random() * 21) - 10));
-
-      // Sparkline shift
-      footfallSpark = [...footfallSpark.slice(1), Math.max(5, Math.floor(Math.random() * 35))];
-
-      // FPS jitter
-      fps = Math.round((14.5 + Math.random() * 1) * 10) / 10;
-
-      // Lost revenue tick
-      lostRevenue = lostRevenue + Math.floor(Math.random() * 28);
-
-      // Shelf jitter (occasionally)
-      if (Math.random() > 0.8) {
-        const idx = Math.floor(Math.random() * shelfFills.length);
-        let newFill = Math.max(0, Math.min(255, shelfFills[idx].fill + Math.floor(Math.random() * 40) - 20));
-        let newState;
-        if (newFill > 180) newState = 'full';
-        else if (newFill > 100) newState = 'partial';
-        else if (newFill > 40) newState = 'low';
-        else newState = 'empty';
-        shelfFills[idx] = { ...shelfFills[idx], fill: newFill, state: newState };
-        shelfFills = [...shelfFills]; // trigger reactivity
-      }
-
-      // Conversion jitter 
-      conversionRate = Math.round((conversionRate + (Math.random() - 0.5) * 0.8) * 10) / 10;
-      conversionRate = Math.max(8, Math.min(18, conversionRate));
-
-    }, 2000);
-
-    // Add alerts occasionally
-    const alertInterval = setInterval(() => {
-      const alertPool = [
-        { severity: 'info', rule: 'occupancy', message: `Zone Aisle ${1 + Math.floor(Math.random() * 3)} occupancy: ${5 + Math.floor(Math.random() * 10)}`, stream: 'overhead' },
-        { severity: 'warning', rule: 'queue', message: `Lane 1 predicted wait: ${formatWait(90 + Math.floor(Math.random() * 120))}`, stream: 'overhead' },
-        { severity: 'info', rule: 'tripwire', message: `Entry detected (tripwire door), total: ${entriesTotal}`, stream: 'overhead' },
-        { severity: 'warning', rule: 'shelf_fill', message: `Low fill on facing ${String.fromCharCode(65 + Math.floor(Math.random() * 4))}${1 + Math.floor(Math.random() * 8)}: ${20 + Math.floor(Math.random() * 30)}%`, stream: 'shelf' },
-      ];
-      const newAlert = { ...alertPool[Math.floor(Math.random() * alertPool.length)], time: new Date().toLocaleTimeString('en-IN', { hour12: false }) };
-      alerts = [newAlert, ...alerts.slice(0, 9)];
-    }, 5000);
-
-    return () => {
-      clearInterval(clockInterval);
-      clearInterval(dataInterval);
-      clearInterval(alertInterval);
-    };
-  });
-
-  // ─── Derived values ───
-  let maxFootfall = $derived(Math.max(...footfallSpark, 1));
-  let maxHourly = $derived(Math.max(...hourlyFootfall.map(h => h.v), 1));
-  let netOccupancy = $derived(entriesTotal - exitsTotal);
 </script>
 
 <!-- ═══════════════ HEADER ═══════════════ -->
@@ -215,21 +106,41 @@
     <div class="header-logo">RA</div>
     <div>
       <div class="header-title">Retail Analytics</div>
-      <div class="header-subtitle">PYNQ-Z2 · Store demo-01</div>
+      <div class="header-subtitle">Edge AI · {d?.store_id ?? 'no store'} · no cloud</div>
     </div>
   </div>
   <div class="header-right">
+    {#if runs.length}
+      <select class="run-picker" bind:value={runId} onchange={refresh}>
+        {#each runs as r}
+          <option value={r.run_id}>{r.run_id}</option>
+        {/each}
+      </select>
+    {/if}
     <div class="nav-tabs">
-      <button class="nav-tab" class:active={activeTab === 'live'} onclick={() => activeTab = 'live'}>Live</button>
-      <button class="nav-tab" class:active={activeTab === 'history'} onclick={() => activeTab = 'history'}>History</button>
-      <button class="nav-tab" class:active={activeTab === 'demo'} onclick={() => activeTab = 'demo'}>Demo</button>
+      <button class="nav-tab" class:active={view === 'dashboard'}
+              disabled={!runId} onclick={() => (view = 'dashboard')}>Dashboard</button>
+      <button class="nav-tab" class:active={view === 'wizard'}
+              onclick={() => (view = 'wizard')}>New run</button>
     </div>
-    <span class="badge badge-backend">PL (FPGA) · {plLatency}ms</span>
+    <span class="badge badge-backend">{d?.backend ?? 'idle'}</span>
     <span class="badge badge-privacy">🔒 DPDP</span>
-    <span class="badge badge-live"><span class="dot"></span> LIVE</span>
+    {#if running}
+      <span class="badge badge-live"><span class="dot"></span> PROCESSING</span>
+    {/if}
     <span class="mono" style="font-size: 13px; color: var(--text-muted);">{currentTime}</span>
   </div>
 </header>
+
+{#if error}
+  <div class="page-error">{error}</div>
+{/if}
+
+{#if view === 'wizard'}
+  <Wizard ondone={onDone} />
+{:else if view === 'loading'}
+  <p class="page-note">Loading…</p>
+{:else}
 
 <!-- ═══════════════ DASHBOARD GRID ═══════════════ -->
 <main class="dashboard-grid">
@@ -241,7 +152,7 @@
       <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
     </div>
     <div class="stat-value cyan">{occupancy}</div>
-    <div class="stat-label">people in store now</div>
+    <div class="stat-label">people in store at the last sample</div>
     <div class="sparkline-bar">
       {#each footfallSpark as val, i}
         <div class="bar cyan" style="height: {(val / maxFootfall) * 100}%; opacity: {0.4 + (i / footfallSpark.length) * 0.6};"></div>
@@ -257,7 +168,7 @@
     <div class="flex-between" style="align-items: flex-end;">
       <div>
         <div class="stat-value green">{entriesTotal}</div>
-        <div class="stat-label">entries today</div>
+        <div class="stat-label">entries</div>
       </div>
       <div style="text-align: right;">
         <div style="font-size: 28px; font-weight: 800; color: var(--accent-amber); letter-spacing: -1px;">{exitsTotal}</div>
@@ -276,7 +187,7 @@
       <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
     </div>
     <div class="stat-value blue">{avgDwell}<span style="font-size: 20px; color: var(--text-muted); font-weight: 500;">min</span></div>
-    <div class="stat-label">across all zones <span class="stat-delta up">▲ 0.3</span></div>
+    <div class="stat-label">across all zones</div>
   </div>
 
   <div class="card" id="tile-conversion">
@@ -285,13 +196,13 @@
       <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
     </div>
     <div class="stat-value purple">{conversionRate}<span style="font-size: 18px; color: var(--text-muted); font-weight: 500;">%</span></div>
-    <div class="stat-label">visitors → buyers <span class="stat-delta down">▼ 1.2</span></div>
+    <div class="stat-label">visitors → buyers (POS is simulated)</div>
   </div>
 
   <!-- Row 2: Zone dwell + Queue + Alerts -->
   <div class="card span-2" id="panel-zones">
     <div class="card-header">
-      <span class="card-title">Zone Headcount & Dwell</span>
+      <span class="card-title">Zone Visits & Dwell</span>
     </div>
     <div style="display: flex; flex-direction: column; gap: 6px;">
       {#each zoneDwell as zone}
@@ -301,8 +212,10 @@
             <div class="lane-bar-fill" style="width: {Math.min(100, zone.count / 8 * 100)}%; background: linear-gradient(90deg, var(--accent-blue), var(--accent-cyan));"></div>
           </div>
           <span class="lane-count">{zone.count}</span>
-          <span class="lane-wait">{zone.dwell}s avg</span>
+          <span class="lane-wait">{zone.dwell}s med</span>
         </div>
+      {:else}
+        <span class="stat-label">No zone visits yet.</span>
       {/each}
     </div>
   </div>
@@ -313,28 +226,23 @@
       <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg>
     </div>
     <div style="display: flex; flex-direction: column; gap: 12px;">
-      <div>
-        <div class="flex-between" style="margin-bottom: 6px;">
-          <span class="lane-label">Lane 1</span>
-          <span class="lane-count" style="color: {queueWait1 > 120 ? 'var(--accent-red)' : 'var(--accent-green)'};">{queueCount1} ppl</span>
+      {#each queue as lane}
+        {@const late = lane.pred_wait_s > targetWait}
+        <div>
+          <div class="flex-between" style="margin-bottom: 6px;">
+            <span class="lane-label">Lane {lane.lane}</span>
+            <span class="lane-count" style="color: {late ? 'var(--accent-red)' : 'var(--accent-green)'};">{lane.count.toFixed(1)} ppl</span>
+          </div>
+          <div class="lane-bar-track">
+            <div class="lane-bar-fill" style="width: {Math.min(100, lane.count / maxQueue * 100)}%; background: {late ? 'var(--accent-red)' : 'var(--accent-amber)'};"></div>
+          </div>
+          <div style="margin-top: 4px; font-size: 12px; color: var(--text-muted);">Est. wait: <span class="mono" style="color: {late ? 'var(--accent-red)' : 'var(--text-secondary)'};">{fmtWait(lane.pred_wait_s)}</span></div>
         </div>
-        <div class="lane-bar-track">
-          <div class="lane-bar-fill" style="width: {queueCount1 / 10 * 100}%; background: {queueWait1 > 120 ? 'var(--accent-red)' : 'var(--accent-amber)'};"></div>
-        </div>
-        <div style="margin-top: 4px; font-size: 12px; color: var(--text-muted);">Est. wait: <span class="mono" style="color: {queueWait1 > 120 ? 'var(--accent-red)' : 'var(--text-secondary)'};">{formatWait(queueWait1)}</span></div>
-      </div>
-      <div>
-        <div class="flex-between" style="margin-bottom: 6px;">
-          <span class="lane-label">Lane 2</span>
-          <span class="lane-count" style="color: var(--accent-green);">{queueCount2} ppl</span>
-        </div>
-        <div class="lane-bar-track">
-          <div class="lane-bar-fill" style="width: {queueCount2 / 10 * 100}%; background: var(--accent-green);"></div>
-        </div>
-        <div style="margin-top: 4px; font-size: 12px; color: var(--text-muted);">Est. wait: <span class="mono" style="color: var(--text-secondary);">{formatWait(queueWait2)}</span></div>
-      </div>
+      {:else}
+        <span class="stat-label">No queue samples yet.</span>
+      {/each}
       <div style="padding-top: 8px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted);">
-        Target: <span class="mono" style="color: var(--text-secondary);">3:00</span> · Counters: <span class="mono" style="color: var(--text-secondary);">2</span>
+        Target: <span class="mono" style="color: var(--text-secondary);">{fmtWait(targetWait)}</span> · Counters: <span class="mono" style="color: var(--text-secondary);">{d?.counters ?? '—'}</span>
       </div>
     </div>
   </div>
@@ -348,9 +256,11 @@
       {#each alerts as alert, i}
         <div class="alert-item" style="animation-delay: {i * 50}ms;">
           <span class="alert-severity {alert.severity}"></span>
-          <span class="alert-text">{@html alert.message}</span>
-          <span class="alert-time">{alert.time}</span>
+          <span class="alert-text">{alert.message}</span>
+          <span class="alert-time">{clockOf(alert.t)}</span>
         </div>
+      {:else}
+        <span class="stat-label">Nothing to report.</span>
       {/each}
     </div>
   </div>
@@ -358,7 +268,7 @@
   <!-- Row 3: Shelf + Heatmap + Hourly chart -->
   <div class="card span-2" id="panel-shelf">
     <div class="card-header">
-      <span class="card-title">Shelf Inventory (Live)</span>
+      <span class="card-title">Shelf Inventory</span>
       <div style="display: flex; gap: 8px; align-items: center;">
         <span style="font-size: 11px; color: var(--text-muted);">Lost revenue: </span>
         <span class="mono" style="font-size: 14px; font-weight: 700; color: var(--accent-red);">₹{lostRevenue.toLocaleString()}</span>
@@ -366,9 +276,11 @@
     </div>
     <div class="shelf-grid">
       {#each shelfFills as cell}
-        <div class="shelf-cell {cell.state}" title="{cell.id}: fill {cell.fill}/255">
+        <div class="shelf-cell {cell.state}" title="{cell.name ?? cell.id}: fill {cell.fill}/255">
           {cell.id}
         </div>
+      {:else}
+        <span class="stat-label">No shelf stream in this run.</span>
       {/each}
     </div>
     <div class="shelf-legend">
@@ -380,7 +292,7 @@
 
     <!-- Stock-out table -->
     <div style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px;">
-      <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 8px;">Active Stock-outs</div>
+      <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 8px;">Stock-outs</div>
       <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
         <thead>
           <tr style="color: var(--text-dim); text-align: left;">
@@ -396,8 +308,8 @@
             <tr style="border-top: 1px solid var(--border);">
               <td class="mono" style="padding: 6px 8px; color: var(--text-primary); font-weight: 600;">{row.facing}</td>
               <td style="padding: 6px 8px; color: var(--text-secondary);">{row.sku}</td>
-              <td class="mono" style="padding: 6px 8px; color: {row.status === 'active' ? 'var(--accent-red)' : 'var(--text-dim)'};">{row.duration}</td>
-              <td class="mono" style="padding: 6px 8px; color: var(--accent-amber);">{row.revenue}</td>
+              <td class="mono" style="padding: 6px 8px; color: {row.status === 'active' ? 'var(--accent-red)' : 'var(--text-dim)'};">{fmtDuration(row.duration_s)}</td>
+              <td class="mono" style="padding: 6px 8px; color: var(--accent-amber);">₹{row.lost}</td>
               <td style="padding: 6px 8px;">
                 {#if row.status === 'active'}
                   <span style="color: var(--accent-red); font-weight: 600; font-size: 11px; text-transform: uppercase;">● Active</span>
@@ -406,13 +318,15 @@
                 {/if}
               </td>
             </tr>
+          {:else}
+            <tr><td colspan="5" style="padding: 8px; color: var(--text-dim);">Every facing stayed stocked.</td></tr>
           {/each}
         </tbody>
       </table>
     </div>
   </div>
 
-  <!-- Heatmap card (already in row with shelf, alerts is row-2 above) -->
+  <!-- Heatmap card -->
   <div class="card" id="panel-heatmap">
     <div class="card-header">
       <span class="card-title">Floor Heatmap</span>
@@ -422,11 +336,6 @@
         {#each heatmapData as heat}
           <div class="heatmap-cell" style="background: {heatColor(heat)};"></div>
         {/each}
-      </div>
-      <div class="heatmap-zones">
-        <span class="heatmap-zone-label" style="left: 35%; bottom: 4%;">Entrance</span>
-        <span class="heatmap-zone-label" style="left: 15%; top: 32%;">Aisle 2</span>
-        <span class="heatmap-zone-label" style="right: 8%; top: 15%;">Checkout</span>
       </div>
     </div>
     <div style="margin-top: 8px; display: flex; justify-content: space-between; font-size: 10px; color: var(--text-dim);">
@@ -440,7 +349,7 @@
   <div class="card span-2" id="panel-hourly">
     <div class="card-header">
       <span class="card-title">Footfall by Hour</span>
-      <span style="font-size: 11px; color: var(--text-dim);">Today</span>
+      <span style="font-size: 11px; color: var(--text-dim);">Run day</span>
     </div>
     <div class="chart-bars">
       {#each hourlyFootfall as h}
@@ -448,11 +357,13 @@
           <div class="bar" style="height: {(h.v / maxHourly) * 100}%; background: linear-gradient(180deg, var(--accent-blue), rgba(59,130,246,0.3));"></div>
           <span class="bar-label">{h.h}</span>
         </div>
+      {:else}
+        <span class="stat-label">No entries counted yet.</span>
       {/each}
     </div>
     <div style="margin-top: 8px; display: flex; justify-content: space-between; font-size: 11px; color: var(--text-dim);">
-      <span>Peak: <span class="mono" style="color: var(--accent-blue); font-weight: 600;">12:00 (67)</span></span>
-      <span>Avg: <span class="mono" style="color: var(--text-secondary);">42.2</span></span>
+      <span>Peak: <span class="mono" style="color: var(--accent-blue); font-weight: 600;">{peakHour ? `${peakHour.h}:00 (${peakHour.v})` : '—'}</span></span>
+      <span>Avg: <span class="mono" style="color: var(--text-secondary);">{avgHour}</span></span>
     </div>
   </div>
 
@@ -466,7 +377,7 @@
         <div class="funnel-step">
           <span class="funnel-label">{step.label}</span>
           <div class="funnel-bar-track">
-            <div class="funnel-bar-fill" style="width: {step.pct}%; background: linear-gradient(90deg, {
+            <div class="funnel-bar-fill" style="width: {Math.max(step.pct, 3)}%; background: linear-gradient(90deg, {
               i === 0 ? 'var(--accent-blue)' :
               i === 1 ? 'var(--accent-cyan)' :
               i === 2 ? 'var(--accent-amber)' :
@@ -499,31 +410,28 @@
     </div>
     <div style="display: flex; flex-direction: column; gap: 10px; font-size: 13px;">
       <div class="flex-between">
-        <span class="text-muted">FPS</span>
-        <span class="mono" style="font-weight: 600; color: var(--accent-green);">{fps}</span>
+        <span class="text-muted">Processing FPS</span>
+        <span class="mono" style="font-weight: 600; color: var(--accent-green);">{d?.fps ?? 0}</span>
       </div>
       <div class="flex-between">
-        <span class="text-muted">PL Latency</span>
-        <span class="mono" style="font-weight: 600; color: var(--accent-cyan);">{plLatency}ms</span>
+        <span class="text-muted">Frames</span>
+        <span class="mono" style="font-weight: 600; color: var(--accent-cyan);">{d?.processed ?? 0}{d?.total ? ` / ${d.total}` : ''}</span>
       </div>
       <div class="flex-between">
-        <span class="text-muted">CPU (PS)</span>
-        <span class="mono" style="font-weight: 600; color: var(--accent-green);">12%</span>
+        <span class="text-muted">Detector</span>
+        <span style="font-size: 11px; padding: 2px 8px; border-radius: 100px; background: rgba(34,197,94,0.1); color: var(--accent-green); font-weight: 600;">{d?.backend ?? '—'}</span>
       </div>
       <div class="flex-between">
-        <span class="text-muted">Memory</span>
-        <span class="mono" style="font-weight: 600; color: var(--text-secondary);">187 MB</span>
+        <span class="text-muted">State</span>
+        <span class="mono" style="font-weight: 600; color: var(--text-secondary);">{d?.state ?? '—'}</span>
       </div>
       <div class="flex-between">
-        <span class="text-muted">Streams</span>
-        <span class="mono" style="font-weight: 600; color: var(--text-secondary);">2 active</span>
+        <span class="text-muted">Cloud</span>
+        <span class="mono" style="font-weight: 600; color: var(--text-secondary);">not required</span>
       </div>
-      <div class="flex-between">
-        <span class="text-muted">Backend</span>
-        <span style="font-size: 11px; padding: 2px 8px; border-radius: 100px; background: rgba(34,197,94,0.1); color: var(--accent-green); font-weight: 600;">Reference (CPU)</span>
-      </div>
-      <div style="margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim);">
-        Store: demo-01 · Uptime: 2h 14m
+      <div style="margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim); display: flex; justify-content: space-between; align-items: center;">
+        <span class="mono">{runId ?? '—'}</span>
+        <button class="text-btn" onclick={dropRun}>delete run</button>
       </div>
     </div>
   </div>
@@ -550,7 +458,7 @@
         <span style="color: var(--accent-green);">✓</span> 7-day raw retention
       </div>
       <div style="display: flex; align-items: center; gap: 6px;">
-        <span style="color: var(--accent-green);">✓</span> Fully offline capable
+        <span style="color: var(--accent-green);">✓</span> Inference on this device
       </div>
       <div style="margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim);">
         DPDP Act 2023 compliant
@@ -558,3 +466,22 @@
     </div>
   </div>
 </main>
+{/if}
+
+<style>
+  .run-picker {
+    background: var(--bg-elevated); border: 1px solid var(--border);
+    color: var(--text-secondary); border-radius: var(--radius-sm);
+    padding: 5px 8px; font-family: var(--font-mono); font-size: 11px;
+  }
+  .page-error {
+    margin: 16px 24px; padding: 10px 14px; border-radius: var(--radius-md);
+    background: var(--accent-red-glow); color: var(--accent-red); font-size: 13px;
+  }
+  .page-note { margin: 40px; color: var(--text-muted); }
+  .text-btn {
+    background: none; border: none; color: var(--text-dim); cursor: pointer;
+    font-size: 11px; text-decoration: underline;
+  }
+  .nav-tab:disabled { opacity: 0.4; cursor: default; }
+</style>

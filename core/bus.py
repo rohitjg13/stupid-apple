@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 
 log = logging.getLogger(__name__)
 
@@ -39,11 +40,31 @@ class Bus:
                     self.dropped += 1   # drop newest; stale analytics beat a stalled pipeline
 
     def drain(self, timeout: float = 5.0):
-        """Test/shutdown helper: wait until every subscriber has caught up."""
-        with self._lock:
-            subs = list(self._subs)
-        for _, q in subs:
-            q.join()
+        """Test/shutdown helper: wait until every subscriber has caught up.
+
+        Subscribers publish too -- backend/alerts.py turns a stockout into an
+        alert -- so one pass of joins is not enough: the alert lands in a queue
+        that was joined a moment ago. Keep going until a whole pass finds
+        nothing queued anywhere.
+
+        ponytail: `timeout` bounds the number of passes, not one pass. A
+        subscriber that publishes back into its own event type loops until the
+        deadline; one that simply blocks forever still blocks here, exactly as
+        it did before. Neither has ever happened; make it interruptible if one
+        does.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            with self._lock:
+                subs = list(self._subs)
+            for _, q in subs:
+                q.join()
+            with self._lock:
+                if all(q.empty() for _, q in self._subs):
+                    return
+            if time.monotonic() >= deadline:
+                log.warning("bus drain timed out with events still queued")
+                return
 
     def _run(self, q, fn):
         while True:

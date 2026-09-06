@@ -152,3 +152,15 @@ def test_delete_removes_the_media_and_the_rows(client, clip):
 def test_runs_are_listed(client, clip):
     upload(client, clip)
     assert client.get("/api/runs").json()
+
+
+def test_the_dashboard_page_is_served(client):
+    r = client.get("/")
+    if r.status_code == 503:
+        pytest.skip("web/dist not built")
+    assert r.status_code == 200 and "<html" in r.text.lower()
+
+
+def test_unknown_paths_fall_through_to_the_spa(client):
+    r = client.get("/anything")
+    assert r.status_code in (200, 503)          # never a 404 for a client-side route

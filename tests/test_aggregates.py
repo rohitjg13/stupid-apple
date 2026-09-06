@@ -64,12 +64,29 @@ def test_dwell_by_zone_computes_median_and_p90(agg):
     assert z["p90_dwell_s"] == 30.0
 
 
-def test_heatmap_sums_counts(agg):
+def test_heatmap_totals_per_cell(agg):
     agg.db.insert("heatmap", {"run_id": "r1", "t_bucket": 5, "gx": 1, "gy": 2, "count": 3})
     agg.db.insert("heatmap", {"run_id": "r1", "t_bucket": 5, "gx": 1, "gy": 3, "count": 4})
     agg.db.drain()
-    rows = agg.heatmap(0, 100)
+    rows = agg.heatmap(0, 3600)                  # epoch seconds, not bucket numbers
     assert sum(r["count"] for r in rows) == 7
+
+
+def test_heatmap_window_is_epoch_seconds(agg):
+    """t_bucket is a minute number; passing seconds straight in found nothing."""
+    agg.db.insert("heatmap", {"run_id": "r1", "t_bucket": 5, "gx": 1, "gy": 2, "count": 3})
+    agg.db.drain()
+    assert agg.heatmap(300.0, 360.0) == [{"gx": 1, "gy": 2, "count": 3}]
+    assert agg.heatmap(0.0, 120.0) == []
+
+
+def test_heatmap_takes_the_running_total_not_the_sum(agg):
+    """Each bucket carries a cumulative count, so summing them double-counts."""
+    for bucket, count in ((5, 10), (6, 25), (7, 40)):
+        agg.db.insert("heatmap", {"run_id": "r1", "t_bucket": bucket, "gx": 0, "gy": 0,
+                                  "count": count})
+    agg.db.drain()
+    assert agg.heatmap(0, 3600) == [{"gx": 0, "gy": 0, "count": 40}]
 
 
 def test_stockout_durations(agg):

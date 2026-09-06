@@ -1,0 +1,19 @@
+[Unit]
+Description=Retail analytics — upload, process and dashboard (Jetson)
+After=multi-user.target
+# Deliberately not After=network-online.target: the store may not have one.
+
+[Service]
+Type=simple
+WorkingDirectory=@APP_DIR@
+Environment=PYTHONUNBUFFERED=1
+Environment=RETAIL_DATA=@APP_DIR@/data
+Environment=RETAIL_YOLO_MODEL=@MODEL@
+ExecStart=/usr/bin/python3 @APP_DIR@/server.py --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

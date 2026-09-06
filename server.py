@@ -23,6 +23,7 @@ import shutil
 import threading
 import time
 import uuid
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
@@ -215,15 +216,18 @@ def _fail_unknown(run_id):
 
 
 # ---- the dashboard document ----------------------------------------------
-def _planogram(run_id):
+@lru_cache(maxsize=32)
+def _clipset(path):
+    """Clipsets never change once written, so the 2 s poll re-reads nothing."""
+    return load_clipset(path)
+
+
+def _config_of(run_id):
     clipset = (runs.get(run_id) or {}).get("clipset")
     if not clipset:
         row = db.query_one("SELECT clipset FROM run WHERE run_id = ?", (run_id,))
         clipset = row["clipset"] if row else None
-    if not clipset or not Path(clipset).is_dir():
-        return [], {}
-    cfg = load_clipset(clipset)
-    return cfg.planogram, {r["id"]: r for r in cfg.rois}
+    return _clipset(clipset) if clipset and Path(clipset).is_dir() else None
 
 
 def _state_of(fill, roi):
@@ -273,19 +277,27 @@ def dashboard(run_id: str = None):
     window = aggregates.run_window(run_id)
     t0 = window["t0"] or 0.0
     t1 = (window["t1"] or 0.0) + 1.0
-    plan, roi_by_id = _planogram(run_id)
+    cfg = _config_of(run_id)
+    plan = cfg.planogram if cfg else []
+    roi_by_id = {r["id"]: r for r in cfg.rois} if cfg else {}
+    checkout = cfg.checkout if cfg else {}
     by_sku = {p["sku"]: p for p in plan}
     by_facing = {p["facing"]: p for p in plan}
 
     totals = aggregates.footfall_totals(run_id)
-    visits = db.query("SELECT zone, dwell_s FROM visit WHERE run_id = ?", (run_id,))
-    dwells = [v["dwell_s"] for v in visits if v["dwell_s"] is not None]
+    # Per shopper, not per visit row: one person browsing three aisles is three
+    # visits, and a funnel whose second step outnumbers its first is nonsense.
+    shoppers = db.query(
+        "SELECT track_id, MAX(dwell_s) AS longest, SUM(dwell_s) AS total "
+        "FROM visit WHERE run_id = ? GROUP BY track_id", (run_id,))
+    dwells = [s["longest"] for s in shoppers if s["longest"] is not None]
     txns = db.query_one("SELECT COUNT(*) AS n, SUM(amount) AS amount "
                         "FROM pos_txn WHERE run_id = ?", (run_id,)) or {}
-    browsed = sum(1 for d in dwells if d >= 5.0)
-    engaged = sum(1 for d in dwells if d >= 30.0)
+    browsed = sum(1 for s in shoppers if (s["longest"] or 0) >= 5.0)
+    engaged = sum(1 for s in shoppers if (s["total"] or 0) >= 30.0)
     purchased = txns.get("n") or 0
-    footfall = totals["entries"] or len(dwells)
+    # Anyone already inside when the clip starts never crosses the door line.
+    footfall = max(totals["entries"], len(shoppers))
 
     shelf = []
     for row in aggregates.shelf_state(run_id):
@@ -318,6 +330,9 @@ def dashboard(run_id: str = None):
         "total": progress.get("total", 0),
         "fps": progress.get("fps", 0.0),
         "backend": progress.get("backend") or "reference",
+        "store_id": cfg.store_id if cfg else None,
+        "target_wait_s": checkout.get("target_wait_s", 180),
+        "counters": checkout.get("counters", 2),
         "t0": t0, "t1": t1,
         "occupancy": aggregates.live_summary(run_id)["occupancy"],
         "entries": totals["entries"], "exits": totals["exits"],

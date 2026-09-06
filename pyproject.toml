@@ -2,14 +2,16 @@
 name = "retail"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = ["numpy", "opencv-python-headless", "fastapi", "uvicorn", "pyyaml", "scipy"]
+dependencies = ["numpy", "opencv-python-headless", "fastapi", "uvicorn",
+                "python-multipart", "pyyaml", "scipy"]
 
 [project.optional-dependencies]
 yolo = ["ultralytics"]          # --backend yolo on the Jetson; never imported otherwise
+dev = ["pytest", "httpx"]       # httpx backs fastapi.testclient
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["error::DeprecationWarning"]
 
 [tool.setuptools]
-packages = ["core", "pl", "sources", "geometry", "shopper", "backend"]
+packages = ["core", "pl", "sources", "geometry", "shopper", "shelf", "backend", "tools"]

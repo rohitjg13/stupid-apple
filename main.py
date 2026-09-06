@@ -143,7 +143,20 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
     sources = {s: build_source(source if cfg.streams[s].get("source") != "sim" else "sim",
                                cfg, s, seed=seed)
                for s in streams}
-    be = build_backend(backend, cfg)
+    # One backend instance per stream. pl/reference.py models the board's single
+    # background model in BRAM and re-warms it whenever STREAM_ID changes, so a
+    # shared instance driven by two interleaved streams never finishes warming
+    # up and the overhead stream reports no blobs at all. There is no BRAM to
+    # share off the board; only `--backend pl` keeps one instance.
+    if backend == "pl":
+        shared = build_backend(backend, cfg)
+        backends = {s: shared for s in streams}
+    else:
+        # A person detector has nothing to say about a shelf (pl/yolo.py), and
+        # a second copy of the weights would sit in GPU memory for nothing.
+        backends = {s: build_backend("reference" if backend == "yolo" and s != "overhead"
+                                     else backend, cfg)
+                    for s in streams}
 
     db = sink = None
     if db_path:
@@ -191,6 +204,7 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
             finished += 1
             continue
         frame = item
+        be = backends.get(frame.stream)
         if be is not None and frame.image is not None:
             frame.result = be.process(frame.image, 0 if frame.stream == "overhead" else 1,
                                       frame.frame_id)
@@ -230,7 +244,11 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
         src.close()
     if db is not None:
         bus.drain()                      # every event reaches the sink...
-        db.close()                       # ...and every insert reaches the file
+        try:
+            db.close()                   # ...and every insert reaches the file
+        except Exception as e:           # a dropped row does not undo the run
+            log.error("database reported a write error", extra={"error": str(e),
+                                                                "dropped": db.dropped})
     if on_progress is not None:
         on_progress(processed, total)
     clock.persist()

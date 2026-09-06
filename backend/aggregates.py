@@ -84,10 +84,17 @@ class Aggregates:
 
     # ---- heatmap ----------------------------------------------------------
     def heatmap(self, t0, t1, run_id=None):
+        """Samples per cell between two epoch times.
+
+        Two things the column names hide: `t_bucket` is a minute number, not a
+        timestamp, so the window is divided down to match; and each row is a
+        running total rather than a delta (shopper/heatmap.py), so cells are
+        MAXed, not summed -- summing the buckets multiplies the traffic.
+        """
         rows = self.db.query(
-            "SELECT gx, gy, SUM(count) AS count FROM heatmap "
-            "WHERE run_id = ? AND t_bucket >= ? AND t_bucket < ? "
-            "GROUP BY gx, gy", (run_id or self.run_id, t0, t1))
+            "SELECT gx, gy, MAX(count) AS count FROM heatmap "
+            "WHERE run_id = ? AND t_bucket >= ? AND t_bucket <= ? "
+            "GROUP BY gx, gy", (run_id or self.run_id, int(t0 // 60), int(t1 // 60)))
         return [{"gx": r["gx"], "gy": r["gy"], "count": r["count"]} for r in rows]
 
     # ---- stock-outs -------------------------------------------------------

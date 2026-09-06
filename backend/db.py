@@ -123,10 +123,25 @@ class DB:
             self._conn.commit()
             return True
         except sqlite3.Error as e:
+            # Retry one at a time: a single bad row must not take 500 good ones
+            # with it. Whatever still fails is dropped, loudly, and re-raised
+            # from drain() so nobody mistakes it for a clean run.
             self._conn.rollback()
             if self._error is None:
                 self._error = e
-            log.exception("db commit failed", extra={"statements": len(batch)})
+            log.exception("db commit failed, retrying row by row",
+                          extra={"statements": len(batch)})
+            dropped = 0
+            for sql, params in batch:
+                try:
+                    self._conn.execute(sql, params)
+                    self._conn.commit()
+                except sqlite3.Error:
+                    self._conn.rollback()
+                    dropped += 1
+                    self.dropped += 1
+            log.error("db rows dropped", extra={"dropped": dropped,
+                                                "recovered": len(batch) - dropped})
             return False
 
     def enqueue(self, sql, params=()):
