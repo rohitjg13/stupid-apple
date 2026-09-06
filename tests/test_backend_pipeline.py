@@ -104,9 +104,21 @@ def test_busy_door_recommends_opening_a_counter():
     assert any(e.payload["rule"] == "open_counter" for e in got.of("alert"))
 
 
-def test_pos_emits_transactions_even_when_idle():
+def test_an_empty_store_sells_nothing():
+    """Phantom sales put Purchased above Footfall and conversion over 100%."""
     bus = Bus()
     got = Collector(bus)
     drive(bus, BackendPipeline(CFG, bus), [0] * 8, n=5)
+
+    assert not got.of("pos_txn")
+
+
+def test_a_quiet_lane_still_sells_once_somebody_is_in_the_store():
+    bus = Bus()
+    got = Collector(bus)
+    pipe = BackendPipeline(CFG, bus)
+    bus.publish(Event(1000.0, CFG.store_id, "overhead", None, "occupancy", {"count": 3}))
+    bus.drain()
+    drive(bus, pipe, [0] * 8, n=5)
 
     assert got.of("pos_txn"), "conversion needs transactions from a quiet store too"

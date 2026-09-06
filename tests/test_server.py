@@ -116,7 +116,7 @@ def test_full_pass_populates_the_dashboard(client, clip):
     assert len(d["heatmap"]) == 16 * 12
     assert len(d["footfall_spark"]) == 12
     assert [f["label"] for f in d["funnel"]] == ["Footfall", "Browsed", "Engaged",
-                                                 "Purchased"]
+                                                 "Picked up"]
     assert d["queue"], "queue estimates should exist for both lanes"
     assert d["t1"] > d["t0"]
 

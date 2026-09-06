@@ -399,6 +399,7 @@ def dashboard(run_id: str = None):
     tiles = aggregates.heatmap(t0, t1, run_id)
     bounds = _floor_bounds(cfg, tiles)
     totals = aggregates.footfall_totals(run_id)
+    occupancy = aggregates.live_summary(run_id)["occupancy"]
     # Per shopper, not per visit row: one person browsing three aisles is three
     # visits, and a funnel whose second step outnumbers its first is nonsense.
     shoppers = db.query(
@@ -410,8 +411,10 @@ def dashboard(run_id: str = None):
     browsed = sum(1 for s in shoppers if (s["longest"] or 0) >= 5.0)
     engaged = sum(1 for s in shoppers if (s["total"] or 0) >= 30.0)
     purchased = txns.get("n") or 0
-    # Anyone already inside when the clip starts never crosses the door line.
-    footfall = max(totals["entries"], len(shoppers))
+    # Three partial views of the same people, so take the fullest: the door
+    # misses anyone already inside when the clip starts, closed visits miss
+    # whoever is still being tracked, and occupancy misses everyone who left.
+    footfall = max(totals["entries"], len(shoppers), occupancy)
 
     shelf = []
     for row in aggregates.shelf_state(run_id):
@@ -448,7 +451,7 @@ def dashboard(run_id: str = None):
         "target_wait_s": checkout.get("target_wait_s", 180),
         "counters": checkout.get("counters", 2),
         "t0": t0, "t1": t1,
-        "occupancy": aggregates.live_summary(run_id)["occupancy"],
+        "occupancy": occupancy,
         "entries": totals["entries"], "exits": totals["exits"],
         "avg_dwell_s": round(sum(dwells) / len(dwells), 1) if dwells else 0.0,
         "zones": zones,
@@ -471,7 +474,7 @@ def dashboard(run_id: str = None):
             {"label": "Footfall", "value": footfall, "pct": 100.0},
             {"label": "Browsed", "value": browsed, "pct": _pct(browsed, footfall)},
             {"label": "Engaged", "value": engaged, "pct": _pct(engaged, footfall)},
-            {"label": "Purchased", "value": purchased, "pct": _pct(purchased, footfall)},
+            {"label": "Picked up", "value": purchased, "pct": _pct(purchased, footfall)},
         ],
         "conversion_rate": _pct(purchased, footfall),
     }
@@ -503,7 +506,13 @@ def _system(progress, cfg):
 
 
 def _pct(n, total):
-    return round(100.0 * n / total, 1) if total else 0.0
+    """Capped at 100: the funnel's steps are subsets of its first step.
+
+    POS and vision are separate sources -- somebody already inside when the
+    clip starts can buy without ever crossing the door line -- so the raw
+    counts stay visible on the bars while the percentage stays a percentage.
+    """
+    return round(min(100.0, 100.0 * n / total), 1) if total else 0.0
 
 
 def _latest_run_id():

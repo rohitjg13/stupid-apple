@@ -27,8 +27,13 @@
     { id: 'promo', x: 20, y: 20, w: 600, h: 100 },
   ]);
   let liveMode = $state(true);
+  let progress = $state(null);
+  let poll = null;
 
   const roleOf = (i) => (i === 0 ? 'overhead' : 'shelf');
+  let pct = $derived(
+    progress?.total ? Math.min(100, (progress.processed / progress.total) * 100) : null,
+  );
   let hasOverhead = $derived(files.some((f) => f.role === 'overhead'));
   let hasShelf = $derived(files.some((f) => f.role === 'shelf'));
 
@@ -62,18 +67,33 @@
     busy = true;
     error = null;
     try {
-      await post(`/api/runs/${run.run_id}/start`, {
+      progress = await post(`/api/runs/${run.run_id}/start`, {
         shelf_rows: shelfRows, shelf_cols: shelfCols, counters,
         target_wait_s: targetWait, backend: backend || null,
         door_line: hasOverhead ? door : null,
         zones: hasOverhead && zones.length ? zones : null,
         live: liveMode,
       });
-      ondone?.(run.run_id);          // the dashboard is where you watch it
+      step = 3;
+      poll = setInterval(watch, 700);
     } catch (e) {
       error = e.message;
     } finally {
       busy = false;
+    }
+  }
+
+  async function watch() {
+    try {
+      progress = await get(`/api/runs/${run.run_id}`);
+    } catch (e) {
+      return;                          // a dropped poll is not a failed run
+    }
+    if (progress.state === 'done' || progress.state === 'error') {
+      clearInterval(poll);
+      poll = null;
+      if (progress.state === 'done') ondone?.(run.run_id);
+      else error = progress.error;
     }
   }
 
@@ -131,7 +151,7 @@
 
 <div class="wizard">
   <div class="wiz-steps">
-    {#each ['Clips', 'Check the view'] as label, i}
+    {#each ['Clips', 'Check the view', 'Process'] as label, i}
       <div class="wiz-step" class:active={step === i + 1} class:done={step > i + 1}>
         <span class="wiz-num">{step > i + 1 ? '✓' : i + 1}</span>{label}
       </div>
@@ -286,12 +306,35 @@
         </div>
         <div class="wiz-actions">
           <button class="link" onclick={() => (step = 1)}>Back</button>
-          <button class="btn" disabled={busy} onclick={start}>Start</button>
+          <button class="btn" disabled={busy} onclick={start}>Process</button>
         </div>
       </div>
     </div>
   {/if}
 
+
+  <!-- ── 3. processing ── -->
+  {#if step === 3}
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Processing</span>
+        <span class="badge badge-backend">{progress?.backend ?? '…'}</span>
+      </div>
+      <div class="stat-value">{pct === null ? '…' : pct.toFixed(0) + '%'}</div>
+      <div class="stat-label">
+        {progress?.processed ?? 0} frames{progress?.total ? ` of ${progress.total}` : ''}
+        · {progress?.fps ?? 0} fps
+      </div>
+      <div class="bar"><div class="bar-fill" style="width: {pct ?? 5}%"></div></div>
+      {#if progress?.state === 'running'}
+        <img class="live-frame" alt="frame being processed"
+             src={url(`/api/runs/${run.run_id}/live.mjpg?stream=${hasOverhead ? 'overhead' : 'shelf'}`)} />
+      {/if}
+      <p class="hint">
+        Inference runs on this box. The clips never leave it, and no frame is written to disk.
+      </p>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -345,6 +388,7 @@
   .preview svg { touch-action: none; }
   .bar { height: 8px; border-radius: 4px; background: var(--bg-elevated);
          overflow: hidden; margin-top: 14px; }
+  .live-frame { width: 100%; display: block; margin-top: 14px; background: #0f172a; }
   .bar-fill { height: 100%; background: var(--accent-blue);
               transition: width var(--transition-normal); }
 </style>

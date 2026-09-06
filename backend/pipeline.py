@@ -48,9 +48,11 @@ class BackendPipeline:
         self.alerts = Alerts(cfg, bus)
         bus.subscribe("*", self.alerts.on_event)
         bus.subscribe("tripwire", self._on_tripwire)
+        bus.subscribe("occupancy", self._on_occupancy)
 
         self._count = {}                                # lane -> smoothed headcount
         self._arrivals = []                             # entry times, trimmed
+        self._occupancy = 0                             # nobody in, nobody buying
         self._last = -1e9
         self._last_advice = -1e9
 
@@ -58,6 +60,9 @@ class BackendPipeline:
     def _on_tripwire(self, event):
         if event.payload["dir"] == "in":
             self._arrivals.append(event.t)
+
+    def _on_occupancy(self, event):
+        self._occupancy = int(event.payload["count"])
 
     def _lambda(self, t):
         """Entries per second over the last LAMBDA_WINDOW_S."""
@@ -92,9 +97,11 @@ class BackendPipeline:
                 if txn is not None:
                     self.bus.publish(txn)
 
-        if self.pos is not None:
-            # A quiet lane still sells things; without this, conversion and the
-            # service rate have nothing to chew on for the whole run.
+        if self.pos is not None and self._occupancy > 0:
+            # A quiet lane still sells things, so the stub ticks over even when
+            # no queue is visible -- but only while somebody is actually in the
+            # store. Selling to an empty shop put purchases above footfall and
+            # printed conversion rates over 100%.
             for txn in self.pos.idle_tick(t, lanes=tuple(sorted(self.lanes))):
                 self.bus.publish(txn)
 
