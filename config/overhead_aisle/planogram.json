@@ -1,0 +1,38 @@
+[
+  {
+    "facing": "SHELF-CEREAL",
+    "sku": "CEREAL-RED-BOX",
+    "name": "Cheerios & Cup Noodles",
+    "unit_price": 65.0,
+    "initial_stock": 24,
+    "low_threshold": 6,
+    "expected_sales_per_hour": 8
+  },
+  {
+    "facing": "SHELF-CHIPS",
+    "sku": "SNACK-VEGGIE-CHIP",
+    "name": "Veggie Crisps & Chips",
+    "unit_price": 45.0,
+    "initial_stock": 18,
+    "low_threshold": 5,
+    "expected_sales_per_hour": 12
+  },
+  {
+    "facing": "SHELF-CANDY",
+    "sku": "CANDY-SNACK-BAR",
+    "name": "Haribo & Candy Trays",
+    "unit_price": 35.0,
+    "initial_stock": 15,
+    "low_threshold": 4,
+    "expected_sales_per_hour": 10
+  },
+  {
+    "facing": "SHELF-LOWER",
+    "sku": "CAN-SPREAD-JAR",
+    "name": "Gourmet Spread Jars",
+    "unit_price": 90.0,
+    "initial_stock": 12,
+    "low_threshold": 3,
+    "expected_sales_per_hour": 5
+  }
+]

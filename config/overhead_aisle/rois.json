@@ -1,0 +1,46 @@
+[
+  {
+    "id": "SHELF-CEREAL",
+    "stream": "shelf",
+    "x": 71,
+    "y": 23,
+    "w": 125,
+    "h": 80,
+    "empty_below": 30,
+    "low_below": 65,
+    "pick_monitor": false
+  },
+  {
+    "id": "SHELF-CHIPS",
+    "stream": "shelf",
+    "x": 202,
+    "y": 19,
+    "w": 118,
+    "h": 49,
+    "empty_below": 30,
+    "low_below": 65,
+    "pick_monitor": false
+  },
+  {
+    "id": "SHELF-CANDY",
+    "stream": "shelf",
+    "x": 202,
+    "y": 68,
+    "w": 118,
+    "h": 32,
+    "empty_below": 25,
+    "low_below": 50,
+    "pick_monitor": true
+  },
+  {
+    "id": "SHELF-LOWER",
+    "stream": "shelf",
+    "x": 129,
+    "y": 102,
+    "w": 70,
+    "h": 14,
+    "empty_below": 30,
+    "low_below": 65,
+    "pick_monitor": true
+  }
+]

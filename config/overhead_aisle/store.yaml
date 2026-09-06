@@ -1,0 +1,7 @@
+store_id: overhead-mart-09
+streams:
+  overhead: {source: file, path: ref_vid/VID-20260906-WA0009.mp4, fps: 30, loop: true}
+  shelf:    {source: file, path: ref_vid/VID-20260906-WA0009.mp4, fps: 30, loop: true}
+checkout: {counters: 1, target_wait_s: 120}
+pos: {source: stub}
+cloud: {enabled: false, url: null}
