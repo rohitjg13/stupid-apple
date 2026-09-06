@@ -279,10 +279,10 @@
   .wiz-step.done { color: var(--accent-green); }
   .wiz-num { display: grid; place-items: center; width: 20px; height: 20px;
              border-radius: 50%; background: var(--bg-elevated); font-size: 11px; }
-  .wiz-step.active .wiz-num { background: var(--accent-cyan); color: #05070c; }
+  .wiz-step.active .wiz-num { background: var(--accent-cyan); color: #fff; }
   .wiz-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 18px; }
-  .wiz-error { padding: 12px 16px; border-radius: var(--radius-md); font-size: 13px;
-               background: var(--accent-red-glow); color: var(--accent-red); }
+  .wiz-error { padding: 12px 16px; font-size: 13px; background: #fee2e2;
+               color: var(--accent-red); border: 1px solid #fecaca; }
   .dropzone { display: flex; flex-direction: column; align-items: center; gap: 6px;
               padding: 42px; border: 1.5px dashed var(--border-active); cursor: pointer;
               border-radius: var(--radius-lg); color: var(--text-muted); font-size: 13px; }
@@ -300,7 +300,7 @@
                   padding: 7px 10px; font-family: var(--font-mono); font-size: 13px; }
   .wiz-actions { display: flex; justify-content: flex-end; align-items: center;
                  gap: 14px; margin-top: 18px; }
-  .btn { background: var(--accent-cyan); color: #05070c; border: none; font-weight: 700;
+  .btn { background: var(--accent-cyan); color: #fff; border: none; font-weight: 700;
          padding: 10px 26px; border-radius: var(--radius-md); cursor: pointer;
          font-size: 14px; transition: filter var(--transition-fast); }
   .btn:hover:not(:disabled) { filter: brightness(1.12); }
@@ -314,6 +314,6 @@
   .preview svg { touch-action: none; }
   .bar { height: 8px; border-radius: 4px; background: var(--bg-elevated);
          overflow: hidden; margin-top: 14px; }
-  .bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent-blue),
-              var(--accent-cyan)); transition: width var(--transition-normal); }
+  .bar-fill { height: 100%; background: var(--accent-blue);
+              transition: width var(--transition-normal); }
 </style>

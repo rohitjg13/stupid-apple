@@ -8,8 +8,8 @@
   let activeTab = $state('live');
 
   // ─── Live data, from /api/dashboard ───
-  // Same variables the mockup had; the values now come off the pipeline
-  // instead of Math.random(). The markup below is unchanged.
+  // The same variables the mockup declared; the values come off the pipeline
+  // now instead of Math.random(). The markup below is Mridhula's.
   let d = $state(null);
   let prev = $state(null);
   let view = $state('loading');          // loading | wizard | dashboard
@@ -85,7 +85,7 @@
   let streams = $derived(d?.system?.streams ?? 0);
   let uptime = $derived(d?.system?.uptime ?? '—');
   let storeId = $derived(d?.store_id ?? '—');
-  let backendName = $derived(d?.backend ?? '—');
+  let backendName = $derived(d?.backend ?? 'idle');   // before the first run
   let lostRevenue = $derived(Math.round(d?.lost_revenue ?? 0));
   let targetWait = $derived(d?.target_wait_s ?? 180);
   let counters = $derived(d?.counters ?? 2);
@@ -109,6 +109,21 @@
     revenue: `₹${Math.round(s.lost)}`,
   })));
 
+  // Status for top metric cards: neutral (empty string) by default,
+  // switches to amber or red only when attention is needed.
+  let occupancyStatus = $derived(
+    occupancy >= 22 ? 'amber' : ''
+  );
+  let footfallStatus = $derived(
+    netOccupancy >= 22 ? 'amber' : ''
+  );
+  let dwellStatus = $derived(
+    avgDwell >= 6.8 ? 'red' : avgDwell >= 5.5 ? 'amber' : ''
+  );
+  let conversionStatus = $derived(
+    conversionRate < 9.5 ? 'red' : conversionRate < 11.0 ? 'amber' : ''
+  );
+
   // ─── Derived values ───
   let maxFootfall = $derived(Math.max(...footfallSpark, 1));
   let maxHourly = $derived(Math.max(...hourlyFootfall.map(h => h.v), 1));
@@ -122,13 +137,12 @@
   let conversionDelta = $derived(prev ? conversionRate - (prev.conversion_rate ?? 0) : 0);
 
   function heatColor(value) {
-    if (value < 0.1) return 'rgba(59, 130, 246, 0.05)';
-    if (value < 0.25) return `rgba(59, 130, 246, ${0.1 + value * 0.4})`;
-    if (value < 0.5) return `rgba(34, 211, 238, ${0.2 + value * 0.5})`;
-    if (value < 0.75) return `rgba(245, 158, 11, ${0.3 + value * 0.5})`;
-    return `rgba(239, 68, 68, ${0.5 + value * 0.4})`;
+    if (value < 0.1) return '#f1f5f9';
+    if (value < 0.25) return '#bae6fd';
+    if (value < 0.5) return '#38bdf8';
+    if (value < 0.75) return '#f59e0b';
+    return '#ef4444';
   }
-
   function formatWait(seconds) {
     const m = Math.floor((seconds || 0) / 60);
     const s = Math.round((seconds || 0) % 60);
@@ -194,11 +208,11 @@
       <span class="card-title">Occupancy</span>
       <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
     </div>
-    <div class="stat-value cyan">{occupancy}</div>
+    <div class="stat-value {occupancyStatus}">{occupancy}</div>
     <div class="stat-label">people in store now</div>
     <div class="sparkline-bar">
       {#each footfallSpark as val, i}
-        <div class="bar cyan" style="height: {(val / maxFootfall) * 100}%; opacity: {0.4 + (i / footfallSpark.length) * 0.6};"></div>
+        <div class="bar {occupancyStatus}" style="height: {(val / maxFootfall) * 100}%; opacity: {0.4 + (i / footfallSpark.length) * 0.6};"></div>
       {/each}
     </div>
   </div>
@@ -210,17 +224,17 @@
     </div>
     <div class="flex-between" style="align-items: flex-end;">
       <div>
-        <div class="stat-value green">{entriesTotal}</div>
+        <div class="stat-value {footfallStatus}">{entriesTotal}</div>
         <div class="stat-label">entries today</div>
       </div>
       <div style="text-align: right;">
-        <div style="font-size: 28px; font-weight: 800; color: var(--accent-amber); letter-spacing: -1px;">{exitsTotal}</div>
+        <div style="font-size: 28px; font-weight: 800; color: var(--text-primary); letter-spacing: -1px;">{exitsTotal}</div>
         <div class="stat-label">exits</div>
       </div>
     </div>
     <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);">
       <span class="stat-label">Net in store: </span>
-      <span class="mono" style="font-weight: 700; color: var(--accent-cyan);">{netOccupancy}</span>
+      <span class="mono" style="font-weight: 700; color: {footfallStatus === 'red' ? 'var(--accent-red)' : footfallStatus === 'amber' ? 'var(--accent-amber)' : 'var(--text-primary)'};">{netOccupancy}</span>
     </div>
   </div>
 
@@ -229,7 +243,7 @@
       <span class="card-title">Avg Dwell Time</span>
       <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
     </div>
-    <div class="stat-value blue">{avgDwell}<span style="font-size: 20px; color: var(--text-muted); font-weight: 500;">min</span></div>
+    <div class="stat-value {dwellStatus}">{avgDwell}<span style="font-size: 20px; color: var(--text-muted); font-weight: 500;">min</span></div>
     <div class="stat-label">across all zones {#if dwellDelta}<span class="stat-delta {dwellDelta > 0 ? 'up' : 'down'}">{dwellDelta > 0 ? '▲' : '▼'} {Math.abs(dwellDelta).toFixed(1)}</span>{/if}</div>
   </div>
 
@@ -238,7 +252,7 @@
       <span class="card-title">Conversion Rate</span>
       <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
     </div>
-    <div class="stat-value purple">{conversionRate}<span style="font-size: 18px; color: var(--text-muted); font-weight: 500;">%</span></div>
+    <div class="stat-value {conversionStatus}">{conversionRate}<span style="font-size: 18px; color: var(--text-muted); font-weight: 500;">%</span></div>
     <div class="stat-label">visitors → buyers {#if conversionDelta}<span class="stat-delta {conversionDelta > 0 ? 'up' : 'down'}">{conversionDelta > 0 ? '▲' : '▼'} {Math.abs(conversionDelta).toFixed(1)}</span>{/if}</div>
   </div>
 
@@ -252,7 +266,7 @@
         <div class="lane-row">
           <span class="lane-label">{zone.name}</span>
           <div class="lane-bar-track">
-            <div class="lane-bar-fill" style="width: {Math.min(100, zone.count / 8 * 100)}%; background: linear-gradient(90deg, var(--accent-blue), var(--accent-cyan));"></div>
+            <div class="lane-bar-fill" style="width: {Math.min(100, zone.count / 8 * 100)}%; background: var(--accent-blue);"></div>
           </div>
           <span class="lane-count">{zone.count}</span>
           <span class="lane-wait">{zone.dwell}s avg</span>
@@ -378,7 +392,12 @@
     </div>
     <div style="margin-top: 8px; display: flex; justify-content: space-between; font-size: 10px; color: var(--text-dim);">
       <span>Low traffic</span>
-      <div style="flex: 1; margin: 0 8px; height: 6px; border-radius: 3px; background: linear-gradient(90deg, rgba(59,130,246,0.1), var(--accent-cyan), var(--accent-amber), var(--accent-red)); align-self: center;"></div>
+      <div style="flex: 1; margin: 0 8px; height: 6px; display: flex; align-self: center;">
+        <div style="flex: 1; background: #bae6fd;"></div>
+        <div style="flex: 1; background: #38bdf8;"></div>
+        <div style="flex: 1; background: #f59e0b;"></div>
+        <div style="flex: 1; background: #ef4444;"></div>
+      </div>
       <span>High traffic</span>
     </div>
   </div>
@@ -392,7 +411,7 @@
     <div class="chart-bars">
       {#each hourlyFootfall as h}
         <div class="bar-group">
-          <div class="bar" style="height: {(h.v / maxHourly) * 100}%; background: linear-gradient(180deg, var(--accent-blue), rgba(59,130,246,0.3));"></div>
+          <div class="bar" style="height: {(h.v / maxHourly) * 100}%; background: var(--accent-blue);"></div>
           <span class="bar-label">{h.h}</span>
         </div>
       {/each}
@@ -413,17 +432,12 @@
         <div class="funnel-step">
           <span class="funnel-label">{step.label}</span>
           <div class="funnel-bar-track">
-            <div class="funnel-bar-fill" style="width: {step.pct}%; background: linear-gradient(90deg, {
+            <div class="funnel-bar-fill" style="width: {step.pct}%; background: {
               i === 0 ? 'var(--accent-blue)' :
               i === 1 ? 'var(--accent-cyan)' :
               i === 2 ? 'var(--accent-amber)' :
               'var(--accent-green)'
-            }, {
-              i === 0 ? 'rgba(59,130,246,0.6)' :
-              i === 1 ? 'rgba(34,211,238,0.6)' :
-              i === 2 ? 'rgba(245,158,11,0.6)' :
-              'rgba(34,197,94,0.6)'
-            });">
+            };">
               {step.value}
             </div>
           </div>
@@ -467,7 +481,7 @@
       </div>
       <div class="flex-between">
         <span class="text-muted">Backend</span>
-        <span style="font-size: 11px; padding: 2px 8px; border-radius: 100px; background: rgba(34,197,94,0.1); color: var(--accent-green); font-weight: 600;">{backendName}</span>
+        <span style="font-size: 11px; padding: 2px 8px; background: #dcfce7; color: #15803d; font-weight: 600; border: 1px solid #bbf7d0;">{backendName}</span>
       </div>
       <div style="margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim);">
         Store: {storeId} · Uptime: {uptime} · <button class="text-btn" onclick={dropRun}>delete run</button>
@@ -508,16 +522,16 @@
 {/if}
 
 <style>
-  /* Only the controls the mockup had no place for: the run picker and the
-     delete link. Everything else is app.css, untouched. */
+  /* Only the two controls the mockup had no place for. Everything else is
+     app.css, exactly as it comes off the branch. */
   .run-picker {
     background: var(--bg-elevated); border: 1px solid var(--border);
-    color: var(--text-secondary); border-radius: var(--radius-sm);
-    padding: 5px 8px; font-family: var(--font-mono); font-size: 11px;
+    color: var(--text-secondary); padding: 5px 8px;
+    font-family: var(--font-mono); font-size: 11px;
   }
   .page-error {
-    margin: 16px 24px; padding: 10px 14px; border-radius: var(--radius-md);
-    background: var(--accent-red-glow); color: var(--accent-red); font-size: 13px;
+    margin: 16px 24px; padding: 10px 14px; font-size: 13px;
+    background: #fee2e2; color: var(--accent-red); border: 1px solid #fecaca;
   }
   .page-note { margin: 40px; color: var(--text-muted); }
   .text-btn {
