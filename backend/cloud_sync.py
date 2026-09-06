@@ -12,14 +12,17 @@ import logging
 import time
 from urllib import error, request
 
+from backend.aggregates import kpi_bucket
+
 log = logging.getLogger(__name__)
 
 
 class CloudSync:
-    def __init__(self, db, url, clock=None, _sender=None):
+    def __init__(self, db, url, clock=None, store_id=None, _sender=None):
         self.db = db
         self.url = url
         self.clock = clock
+        self.store_id = store_id
         self._sender = _sender or _http_post
 
     def _cursor(self):
@@ -27,9 +30,12 @@ class CloudSync:
         return int(row["last_bucket"]) if row else 0
 
     def _save_cursor(self, bucket):
+        # Drained, not just enqueued: the cursor has to be on disk before the
+        # next sync reads it, or a burst of syncs re-uploads the same buckets.
         self.db.enqueue(
             "INSERT INTO sync_state (key, last_bucket) VALUES ('kpi', ?) "
             "ON CONFLICT(key) DO UPDATE SET last_bucket = ?", (bucket, bucket))
+        self.db.drain()
 
     def unsynced(self):
         return self.clock is not None and not self.clock.synced
@@ -42,12 +48,14 @@ class CloudSync:
 
         cursor = self._cursor()
         rows = self.db.query(
-            "SELECT t_bucket, key, value FROM kpi_15m WHERE t_bucket > ? "
+            "SELECT run_id, t_bucket, key, value FROM kpi_15m WHERE t_bucket > ? "
             "ORDER BY t_bucket", (cursor,))
         if not rows:
             return 0, cursor
 
-        payload = json.dumps({"kpi": rows}).encode()
+        # Aggregates only. No frames, no tracks, no per-visitor rows: what
+        # leaves the store is 15-minute scalars and the run they belong to.
+        payload = json.dumps({"store_id": self.store_id, "kpi": rows}).encode()
         latest = rows[-1]["t_bucket"]
         for attempt in range(retries):
             try:
@@ -69,6 +77,6 @@ def _http_post(url, data):
         resp.read()
 
 
-def kpi_bucket(t):
-    """15-minute bucket (unix seconds) for a timestamp."""
-    return int(t // 900) * 900
+# One definition of the bucket, in aggregates.py, re-exported here because the
+# receiver and the sync client both talk in buckets.
+__all__ = ["CloudSync", "kpi_bucket"]
