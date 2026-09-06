@@ -3,7 +3,15 @@ __pycache__/
 .pytest_cache/
 *.bak
 .DS_Store
-footage/
+# Clips are downloaded, never committed; the hand labels are the opposite.
+# git will not descend into an ignored directory, so the clips are excluded
+# entry by entry rather than by ignoring footage/ wholesale.
+footage/*
+!footage/groundtruth/
+footage/groundtruth/*
+!footage/groundtruth/*.json
 *.egg-info/
 .commandcode
 .venv/
+# Rendered reports (tools/queue_report.py writes video here).
+out/

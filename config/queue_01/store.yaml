@@ -1,0 +1,7 @@
+store_id: demo-01
+streams:
+  overhead: {source: file, path: footage/queue_01.mp4, fps: 30, loop: false}
+  shelf:    {source: file, path: footage/queue_01.mp4, fps: 30, loop: false}
+checkout: {counters: 1, target_wait_s: 180}
+pos: {source: stub}
+cloud: {enabled: false, url: null}

@@ -1,0 +1,204 @@
+{
+  "clip": "queue_01",
+  "source": "footage/queue_01.mp4",
+  "fps": 30.0,
+  "labelled_by": "manan, by eye, every 45 frames (1.5 s)",
+  "definition": "count = people whose torso centre is inside the lane band (PL 320x240: x 59..275, y 80..150). The person being served counts. Staff behind the counter and the seating area across the top of frame do not.",
+  "caveats": [
+    "Only 31 labels, and the true count takes just two values (3 and 4) for the whole clip. That is enough to measure bias, not enough to validate a headcount regression across a range.",
+    "Frame 1035 (t=34.5 s) is a fade-to-black transition in the source video, not a real scene. It is labelled but excluded from the regression fit.",
+    "No wait times: exactly one service completion is visible in 45 s, so actual_wait_s cannot be labelled from this clip."
+  ],
+  "exclude_from_fit": [
+    1035
+  ],
+  "peak_t": 20.0,
+  "queue": [
+    {
+      "frame": 0,
+      "t": 0.0,
+      "lane": 1,
+      "count": 3
+    },
+    {
+      "frame": 45,
+      "t": 1.5,
+      "lane": 1,
+      "count": 3
+    },
+    {
+      "frame": 90,
+      "t": 3.0,
+      "lane": 1,
+      "count": 3
+    },
+    {
+      "frame": 135,
+      "t": 4.5,
+      "lane": 1,
+      "count": 3
+    },
+    {
+      "frame": 180,
+      "t": 6.0,
+      "lane": 1,
+      "count": 3
+    },
+    {
+      "frame": 225,
+      "t": 7.5,
+      "lane": 1,
+      "count": 3
+    },
+    {
+      "frame": 270,
+      "t": 9.0,
+      "lane": 1,
+      "count": 3
+    },
+    {
+      "frame": 315,
+      "t": 10.5,
+      "lane": 1,
+      "count": 3
+    },
+    {
+      "frame": 360,
+      "t": 12.0,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 405,
+      "t": 13.5,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 450,
+      "t": 15.0,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 495,
+      "t": 16.5,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 540,
+      "t": 18.0,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 585,
+      "t": 19.5,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 630,
+      "t": 21.0,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 675,
+      "t": 22.5,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 720,
+      "t": 24.0,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 765,
+      "t": 25.5,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 810,
+      "t": 27.0,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 855,
+      "t": 28.5,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 900,
+      "t": 30.0,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 945,
+      "t": 31.5,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 990,
+      "t": 33.0,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 1035,
+      "t": 34.5,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 1080,
+      "t": 36.0,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 1125,
+      "t": 37.5,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 1170,
+      "t": 39.0,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 1215,
+      "t": 40.5,
+      "lane": 1,
+      "count": 4
+    },
+    {
+      "frame": 1260,
+      "t": 42.0,
+      "lane": 1,
+      "count": 3
+    },
+    {
+      "frame": 1305,
+      "t": 43.5,
+      "lane": 1,
+      "count": 3
+    },
+    {
+      "frame": 1350,
+      "t": 45.0,
+      "lane": 1,
+      "count": 3
+    }
+  ]
+}
