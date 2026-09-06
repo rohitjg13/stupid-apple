@@ -15,3 +15,8 @@ footage/groundtruth/*
 .venv/
 # Rendered reports (tools/queue_report.py writes video here).
 out/
+
+# Source recordings dropped into the planning dir. Same rule as footage/:
+# SHARED.md §8 keeps clips out of git and downloads them instead.
+.mrkr/*.mp4
+.mrkr/*.mov
