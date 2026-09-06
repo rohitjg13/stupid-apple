@@ -6,4 +6,4 @@ arcade1.mp4  --  25.6 s, detector: yolo
    over time: footfall.csv    by store zone: needs zones.json (--config)
 3. DWELL             3 people stood still >= 2 s, longest 15.61 s
    per person: dwell.csv    near what: image regions (see dwell.csv); named displays need zones.json
-4. HEATMAP           heatmap.png   hottest: middle-left (452 samples)
+4. HEATMAP           heatmap.png   green = walked, red = stood   most standing: middle-left (15.1 s)

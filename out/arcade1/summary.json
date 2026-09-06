@@ -26,7 +26,9 @@
       "x": 152,
       "y": 200,
       "region": "middle-left",
-      "foot_samples": 452
-    }
+      "standing_s": 15.1
+    },
+    "cells_walked": 92,
+    "legend": "green = walked through, yellow -> red = standing time"
   }
 }

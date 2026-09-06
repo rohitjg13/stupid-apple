@@ -7,8 +7,9 @@ The report folder answers the four shopper-analytics questions, one file each,
 and is honest about which ones need a per-camera config:
 
     tracked.mp4        annotated video: boxes, ids, dwell labels
-    heatmap.png        4. movement heatmap -- cumulative, drawn ONCE over a still,
-                          because history painted over live video is misleading
+    heatmap.png        4. dwell heatmap over a still: light green where people
+                          walked, yellow -> red where they stood (full red = 10 s
+                          standing, or 5 s for two people on the same spot)
     dwell.csv          3. per person: seconds present, seconds standing still,
                           distance walked, which image region they dwelt in
     footfall.csv       2. per time bucket: people present, arrivals, departures
@@ -132,16 +133,43 @@ def draw_zones(canvas, cfg, stream):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 120, 120), 1, cv2.LINE_AA)
 
 
-def draw_heat(canvas, grid, strength=0.7):
-    """Blend a heat grid over the frame. Normalised after blur so the peak is red."""
-    if grid.max() <= 0:
+def _impulse(shape):
+    g = np.zeros(shape, dtype=np.float32)
+    g[shape[0] // 2, shape[1] // 2] = 1.0
+    return g
+
+
+def draw_dwell_heat(canvas, visit, dwell, full):
+    """Three tiers on one absolute scale, so nothing is red for no reason.
+
+    * walked through  -> light green, faint
+    * stood still     -> yellow shading to red as standing time accumulates
+    * two on one spot -> accumulates twice as fast
+
+    `full` is the standing count that means full red (seconds x fps). With a
+    per-frame normalisation the first frame anyone stood still was already red;
+    an absolute scale is what lets a spot visibly *get darker* over time.
+    """
+    if visit.max() <= 0:
         return canvas
-    big = cv2.resize(grid, (W, H), interpolation=cv2.INTER_LINEAR)
-    big = cv2.GaussianBlur(big, (0, 0), HEAT_CELL / 2)
-    norm = (big / big.max()) ** 0.5
-    heat = (norm * 255).astype(np.uint8)
-    colour_map = cv2.applyColorMap(heat, cv2.COLORMAP_JET)
-    alpha = (norm * strength)[..., None]
+    up = lambda g: cv2.GaussianBlur(
+        cv2.resize(g.astype(np.float32), (W, H), interpolation=cv2.INTER_LINEAR),
+        (0, 0), HEAT_CELL * 0.75)
+    # Normalise AFTER blurring, against what one perfectly-still person produces.
+    # A real shopper's foot point twitches across two to four adjacent cells, so
+    # no single cell ever holds their full standing time, and the blur then cuts a
+    # lone cell's peak to ~40%: 15 s of standing rendered as faint green. Dividing
+    # by the blurred impulse peak lets the twitching sum back together under the
+    # blur, so 10 s means red whether the feet moved a few pixels or not.
+    unit_peak = up(_impulse(visit.shape)).max()
+    walked = np.clip(up((visit > 0).astype(np.float32)) / unit_peak, 0, 1)
+    stood = np.clip(up(dwell) / (max(full, 1.0) * unit_peak), 0, 1)
+    # JET: 0.5 = light green, 0.75 = yellow, 0.88 = bright red, 1.0 = MAROON.
+    # Cap below 1.0 so full saturation is the brightest red, not a dark one that
+    # reads as cooler than 90%.
+    value = np.where(walked > 0.05, 0.5 + 0.38 * stood, 0.0)
+    colour_map = cv2.applyColorMap((value * 255).astype(np.uint8), cv2.COLORMAP_JET)
+    alpha = np.clip(walked * 0.22 + stood * 0.45, 0, 0.72)[..., None]   # walked = *light* green
     return (canvas * (1 - alpha) + colour_map * alpha).astype(np.uint8)
 
 
@@ -175,7 +203,9 @@ class Report:
         self.has_door, self.has_zones = has_door, has_zones
         self.people = {}                    # id -> record
         self.per_frame = []                 # people present, per frame
-        self.heat = np.zeros((H // HEAT_CELL, W // HEAT_CELL), dtype=np.float32)
+        shape = (H // HEAT_CELL, W // HEAT_CELL)
+        self.heat_visit = np.zeros(shape, dtype=np.float32)   # frames anyone's feet were here
+        self.heat_dwell = np.zeros(shape, dtype=np.float32)   # frames someone stood still here
         self.crossings = []                 # (frame, dir) from a configured door
         self.zone_frames = defaultdict(Counter)   # id -> zone -> frames
         self.last_image = None
@@ -191,11 +221,14 @@ class Report:
                 "regions": Counter()})
             rec["last"], rec["last_foot"], rec["walked"] = f, (fu, fv), tr.travelled
             rec["present"] += 1
-            rec["still"] += int(standing_of(tr))
+            still = standing_of(tr)
+            rec["still"] += int(still)
             rec["regions"][region_of(fu, fv, self.rect)] += 1
             gx = int(min(max(fu, 0), W - 1)) // HEAT_CELL
             gy = int(min(max(fv, 0), H - 1)) // HEAT_CELL
-            self.heat[gy, gx] += 1.0
+            self.heat_visit[gy, gx] += 1.0
+            if still:
+                self.heat_dwell[gy, gx] += 1.0     # two people here -> twice as fast
             z = zone_of(tr)
             if z:
                 self.zone_frames[tr.id][z] += 1
@@ -279,11 +312,11 @@ class Report:
         dw = self.dwell_rows()
         long_dwell = [r for r in dw if r["standing_still_s"] >= 2.0]
         hot = None
-        if self.heat.max() > 0:
-            gy, gx = np.unravel_index(int(np.argmax(self.heat)), self.heat.shape)
+        if self.heat_dwell.max() > 0:
+            gy, gx = np.unravel_index(int(np.argmax(self.heat_dwell)), self.heat_dwell.shape)
             hot = {"x": int(gx * HEAT_CELL + HEAT_CELL // 2), "y": int(gy * HEAT_CELL + HEAT_CELL // 2),
                    "region": region_of(gx * HEAT_CELL, gy * HEAT_CELL, self.rect),
-                   "foot_samples": int(self.heat.max())}
+                   "standing_s": round(float(self.heat_dwell.max()) / self.fps, 1)}
         return {
             "video": video, "detector": detector, "frames": n,
             "duration_s": round(n / self.fps, 1),
@@ -296,11 +329,13 @@ class Report:
             "3_dwell": {"people_who_stood_still_2s_or_more": len(long_dwell),
                         "longest_still_s": max((r["standing_still_s"] for r in dw), default=0.0),
                         "near": "image regions (see dwell.csv); named displays need zones.json"},
-            "4_heatmap": {"file": "heatmap.png", "hottest": hot},
+            "4_heatmap": {"file": "heatmap.png", "hottest": hot,
+                          "cells_walked": int((self.heat_visit > 0).sum()),
+                          "legend": "green = walked through, yellow -> red = standing time"},
         }
 
 
-def write_report(rep, out_dir, video, detector, cfg, stream):
+def write_report(rep, out_dir, video, detector, cfg, stream, heat_full_s=10.0):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -319,10 +354,11 @@ def write_report(rep, out_dir, video, detector, cfg, stream):
 
     # 4. the heatmap, once, over a still -- this is the afterwards artefact.
     base = rep.last_image.copy() if rep.last_image is not None else np.full((H, W, 3), 18, np.uint8)
-    base = draw_heat(base, rep.heat, strength=0.75)
+    base = draw_dwell_heat(base, rep.heat_visit, rep.heat_dwell, rep.fps * heat_full_s)
     draw_zones(base, cfg, stream)
-    draw_banner(base, f"movement heatmap  {int(rep.heat.sum())} foot-samples over "
-                      f"{len(rep.per_frame) / rep.fps:.0f} s  (red = most time spent)")
+    peak = rep.heat_dwell.max() / rep.fps
+    draw_banner(base, f"dwell heatmap over {len(rep.per_frame) / rep.fps:.0f} s   green = walked "
+                      f"through   red = {heat_full_s:.0f} s standing   (peak here {peak:.1f} s)")
     cv2.imwrite(str(out_dir / "heatmap.png"), base)
 
     s = rep.summary(video, detector)
@@ -339,8 +375,8 @@ def write_report(rep, out_dir, video, detector, cfg, stream):
         f"3. DWELL             {dw['people_who_stood_still_2s_or_more']} people stood still >= 2 s, "
         f"longest {dw['longest_still_s']} s",
         f"   per person: dwell.csv    near what: {dw['near']}",
-        f"4. HEATMAP           heatmap.png" +
-        (f"   hottest: {hm['hottest']['region']} ({hm['hottest']['foot_samples']} samples)" if hm["hottest"] else ""),
+        f"4. HEATMAP           heatmap.png   green = walked, red = stood" +
+        (f"   most standing: {hm['hottest']['region']} ({hm['hottest']['standing_s']} s)" if hm["hottest"] else ""),
     ]
     (out_dir / "summary.txt").write_text("\n".join(lines) + "\n")
     return out_dir
@@ -370,9 +406,10 @@ def main(argv=None):
     ap.add_argument("--morph", type=int, default=1, help="opening passes; 2 kills noise")
     ap.add_argument("--high-area", type=int, default=None,
                     help="confident-blob area; lower when people are small in frame")
-    ap.add_argument("--heat", action="store_true",
-                    help="also paint a *decaying* live glow in the video (off by default; "
-                         "the cumulative heatmap goes in heatmap.png)")
+    ap.add_argument("--heat-full-s", type=float, default=10.0,
+                    help="seconds of standing still that render as full red (two people "
+                         "on one spot get there in half the time)")
+    ap.add_argument("--no-heat", action="store_true", help="leave the heatmap out of the video")
     ap.add_argument("--no-open", action="store_true")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -449,8 +486,7 @@ def main(argv=None):
             return None
         return zmap.zone_of(*image_to_floor(Hm, tr.foot))
 
-    live = np.zeros_like(rep.heat)
-    decay = p.heatmap_decay_per_s ** (1.0 / fps)
+    heat_full = fps * a.heat_full_s
     writer = cv2.VideoWriter(a.out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H))
     shown = 0
     try:
@@ -482,13 +518,8 @@ def main(argv=None):
                     label += f" {z}"
                 labels[tr.id] = label
 
-            if a.heat:
-                live *= decay
-                for tr in tracks:
-                    fu, fv = tr.foot
-                    live[int(min(max(fv, 0), H - 1)) // HEAT_CELL,
-                         int(min(max(fu, 0), W - 1)) // HEAT_CELL] += 1.0
-                canvas = draw_heat(canvas, live, strength=0.5)
+            if not a.no_heat:
+                canvas = draw_dwell_heat(canvas, rep.heat_visit, rep.heat_dwell, heat_full)
             draw_zones(canvas, cfg, a.stream)
             draw_wires(canvas, wires.wires)
             draw_tracks(canvas, tracks, labels)
@@ -504,7 +535,8 @@ def main(argv=None):
         src.close()
         writer.release()
 
-    out_dir = write_report(rep, a.report, a.video or "sim", a.detector, cfg, a.stream)
+    out_dir = write_report(rep, a.report, a.video or "sim", a.detector, cfg, a.stream,
+                           heat_full_s=a.heat_full_s)
     log.info("wrote %s (%d frames)", a.out, shown)
     log.info("report in %s/", out_dir)
     log.info("%s", (out_dir / "summary.txt").read_text())

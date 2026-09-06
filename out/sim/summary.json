@@ -1,32 +1,34 @@
 {
   "video": "sim",
   "detector": "mog2",
-  "frames": 600,
-  "duration_s": 40.0,
+  "frames": 900,
+  "duration_s": 60.0,
   "1_entries_exits": {
-    "entered": 6,
-    "exited": 1,
+    "entered": 10,
+    "exited": 5,
     "basis": "configured door line"
   },
   "2_footfall": {
-    "people_present_mean": 5.21,
-    "people_present_max": 11,
-    "distinct_people_tracked": 12,
+    "people_present_mean": 7.25,
+    "people_present_max": 13,
+    "distinct_people_tracked": 19,
     "by_zone": "see dwell.csv",
     "by_time": "see footfall.csv"
   },
   "3_dwell": {
-    "people_who_stood_still_2s_or_more": 10,
-    "longest_still_s": 28.2,
+    "people_who_stood_still_2s_or_more": 13,
+    "longest_still_s": 41.67,
     "near": "image regions (see dwell.csv); named displays need zones.json"
   },
   "4_heatmap": {
     "file": "heatmap.png",
     "hottest": {
-      "x": 344,
-      "y": 376,
-      "region": "bottom-centre",
-      "foot_samples": 289
-    }
+      "x": 552,
+      "y": 344,
+      "region": "bottom-right",
+      "standing_s": 23.8
+    },
+    "cells_walked": 392,
+    "legend": "green = walked through, yellow -> red = standing time"
   }
 }

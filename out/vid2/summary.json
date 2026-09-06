@@ -4,29 +4,31 @@
   "frames": 468,
   "duration_s": 19.5,
   "1_entries_exits": {
-    "entered": 2,
-    "exited": 3,
+    "entered": 1,
+    "exited": 2,
     "basis": "frame edge -- proxy; configure a door line for real store entries"
   },
   "2_footfall": {
-    "people_present_mean": 0.9,
-    "people_present_max": 5,
-    "distinct_people_tracked": 19,
+    "people_present_mean": 2.42,
+    "people_present_max": 6,
+    "distinct_people_tracked": 15,
     "by_zone": "needs zones.json (--config)",
     "by_time": "see footfall.csv"
   },
   "3_dwell": {
-    "people_who_stood_still_2s_or_more": 1,
-    "longest_still_s": 2.25,
+    "people_who_stood_still_2s_or_more": 4,
+    "longest_still_s": 12.79,
     "near": "image regions (see dwell.csv); named displays need zones.json"
   },
   "4_heatmap": {
     "file": "heatmap.png",
     "hottest": {
-      "x": 168,
+      "x": 424,
       "y": 296,
-      "region": "middle-left",
-      "foot_samples": 43
-    }
+      "region": "middle-centre",
+      "standing_s": 15.1
+    },
+    "cells_walked": 79,
+    "legend": "green = walked through, yellow -> red = standing time"
   }
 }

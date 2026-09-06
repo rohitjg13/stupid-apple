@@ -7,7 +7,7 @@
 #
 # Writes out/<name>/ containing:
 #   tracked.mp4        annotated video
-#   heatmap.png        4. movement heatmap, cumulative, over a still
+#   heatmap.png        4. dwell heatmap: green = walked through, red = stood still (also in the video)
 #   dwell.csv          3. per person: present, standing still, distance walked, region
 #   footfall.csv       2. people present / arrivals / departures per time bucket
 #   entries_exits.csv  1. door crossings with --config, else a labelled frame-edge proxy

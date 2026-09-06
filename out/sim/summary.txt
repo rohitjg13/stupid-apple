@@ -1,9 +1,9 @@
-sim  --  40.0 s, detector: mog2
+sim  --  60.0 s, detector: mog2
 
-1. ENTRIES / EXITS   entered 6   exited 1
+1. ENTRIES / EXITS   entered 10   exited 5
    basis: configured door line
-2. FOOTFALL          mean 5.21 people present, peak 11, 12 distinct people tracked
+2. FOOTFALL          mean 7.25 people present, peak 13, 19 distinct people tracked
    over time: footfall.csv    by store zone: see dwell.csv
-3. DWELL             10 people stood still >= 2 s, longest 28.2 s
+3. DWELL             13 people stood still >= 2 s, longest 41.67 s
    per person: dwell.csv    near what: image regions (see dwell.csv); named displays need zones.json
-4. HEATMAP           heatmap.png   hottest: bottom-centre (289 samples)
+4. HEATMAP           heatmap.png   green = walked, red = stood   most standing: bottom-right (23.8 s)

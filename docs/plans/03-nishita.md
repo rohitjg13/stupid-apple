@@ -178,13 +178,15 @@ question -- and honest about which need a per-camera config:
 | `entries_exits.csv` | 1. entering / exiting | proxy: tracks that appeared from or left via a frame *edge*, labelled as such | crossings of the configured door line, per time bucket |
 | `footfall.csv` | 2. footfall over time | people present, arrivals, departures per 10 s bucket | same, plus `mostly_in_zone` per person in `dwell.csv` |
 | `dwell.csv` | 3. dwell near products | per person: seconds present, seconds standing still, distance walked, image region | plus the named zone |
-| `heatmap.png` | 4. movement heatmap | cumulative foot positions over a still of the scene | same, with zone outlines |
+| `heatmap.png` | 4. heatmap | **dwell heatmap** over a still: light green where people walked, yellow → red where they stood; full red = 10 s standing, or two people for 5 s | same, with zone outlines |
 | `tracked.mp4`, `summary.txt/.json` | | annotated video; headline numbers | |
 
 "By day" is not a per-clip number: the backend aggregates `footfall_by_day`
-across runs. The heatmap is drawn **once, over a still**, not as a live overlay:
-history painted over live video reads as a person on fire and stays red after
-they leave. `--heat` adds a *decaying* glow to the video for those who want it.
+across runs. The heatmap is in the video too, on an **absolute** scale
+(`--heat-full-s`, default 10 s of standing = full red), so a spot visibly gets
+darker the longer someone stands there or the more people join it. Per-frame
+normalisation was tried first and rejected: whatever was hottest *at that moment*
+rendered red, so red dots appeared for no reason. `--no-heat` removes it.
 
 Knobs, in the order they are usually needed:
 

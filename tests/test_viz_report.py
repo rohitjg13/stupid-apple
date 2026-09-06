@@ -95,8 +95,84 @@ def test_a_configured_door_reports_crossings_not_the_proxy():
 
 def test_summary_is_honest_about_what_needs_a_config():
     rep = Report(fps=10.0, rect=(0, 0, 640, 480), bucket_s=1.0, has_door=False, has_zones=False)
-    rep.frame(0, [FakeTrack(0, (100, 100))], lambda tr: False, lambda tr: None, None)
+    rep.frame(0, [FakeTrack(0, (100, 100))], lambda tr: True, lambda tr: None, None)
     s = rep.summary("x.mp4", "yolo")
     assert "proxy" in s["1_entries_exits"]["basis"]
     assert "zones.json" in s["2_footfall"]["by_zone"]
-    assert s["4_heatmap"]["hottest"]["foot_samples"] == 1
+    assert s["4_heatmap"]["hottest"]["standing_s"] == 0.1
+
+
+# --- the dwell heatmap ---------------------------------------------------------
+def test_walking_through_marks_the_cell_as_visited_but_adds_no_dwell():
+    rep = Report(fps=10.0, rect=(0, 0, 640, 480), bucket_s=1.0, has_door=False, has_zones=False)
+    rep.frame(0, [FakeTrack(0, (100, 100))], lambda tr: False, lambda tr: None, None)
+    assert rep.heat_visit.sum() == 1 and rep.heat_dwell.sum() == 0
+
+
+def test_standing_still_accumulates_dwell():
+    rep = Report(fps=10.0, rect=(0, 0, 640, 480), bucket_s=1.0, has_door=False, has_zones=False)
+    for f in range(30):
+        rep.frame(f, [FakeTrack(0, (100, 100))], lambda tr: True, lambda tr: None, None)
+    assert rep.heat_dwell.max() == 30                    # 3 s of standing at 10 fps
+
+
+def test_two_people_on_one_spot_heat_it_twice_as_fast():
+    rep = Report(fps=10.0, rect=(0, 0, 640, 480), bucket_s=1.0, has_door=False, has_zones=False)
+    for f in range(10):
+        rep.frame(f, [FakeTrack(0, (100, 100)), FakeTrack(1, (104, 102))],
+                  lambda tr: True, lambda tr: None, None)
+    assert rep.heat_dwell.max() == 20
+
+
+def test_dwell_heat_renders_nothing_where_nobody_went():
+    from tools.viz_tracks import draw_dwell_heat
+    canvas = np.full((480, 640, 3), 100, np.uint8)
+    out = draw_dwell_heat(canvas, np.zeros((30, 40), np.float32), np.zeros((30, 40), np.float32), 100)
+    assert (out == canvas).all()
+
+
+def test_a_still_spot_gets_redder_than_a_walked_one_on_the_same_scale():
+    """Green for walking, red for standing -- and neither depends on the frame's max."""
+    from tools.viz_tracks import draw_dwell_heat
+    visit = np.zeros((30, 40), np.float32); dwell = np.zeros((30, 40), np.float32)
+    visit[10, 10] = 1                                     # walked through
+    visit[20, 30] = 100; dwell[20, 30] = 100              # stood 10 s at 10 fps
+    canvas = np.zeros((480, 640, 3), np.uint8)
+    out = draw_dwell_heat(canvas, visit, dwell, full=100)
+    walked = out[10 * 16 + 8, 10 * 16 + 8].astype(int)   # BGR
+    stood = out[20 * 16 + 8, 30 * 16 + 8].astype(int)
+    assert walked[1] > walked[2], f"walked-through pixel is not green-ish: {walked}"
+    assert stood[2] > stood[1] and stood[2] > walked[2], f"standing pixel is not red-ish: {stood}"
+
+
+def test_ten_seconds_standing_renders_red_even_when_the_feet_twitch():
+    """arcade1: 15 s of standing rendered faint green, because a real foot point
+    wanders across neighbouring cells and no single cell held the total."""
+    from tools.viz_tracks import draw_dwell_heat
+    visit = np.zeros((30, 40), np.float32); dwell = np.zeros((30, 40), np.float32)
+    for cell in ((20, 30), (20, 31), (21, 30), (21, 31)):      # 2x2 twitch
+        visit[cell] = 25; dwell[cell] = 25                       # 100 frames total = 10 s
+    out = draw_dwell_heat(np.zeros((480, 640, 3), np.uint8), visit, dwell, full=100)
+    b, g, r = out[21 * 16, 31 * 16].astype(int)
+    # Spread over four cells it reintegrates to ~75% of a perfectly still person,
+    # so orange-red rather than the brightest red: clearly hot, red-dominant.
+    assert r > 110 and r > 1.4 * g and r > b, f"twitching stander is not red-hot: {(b, g, r)}"
+
+
+def test_a_perfectly_still_person_for_ten_seconds_is_also_red():
+    from tools.viz_tracks import draw_dwell_heat
+    visit = np.zeros((30, 40), np.float32); dwell = np.zeros((30, 40), np.float32)
+    visit[15, 20] = 100; dwell[15, 20] = 100
+    out = draw_dwell_heat(np.zeros((480, 640, 3), np.uint8), visit, dwell, full=100)
+    b, g, r = out[15 * 16 + 8, 20 * 16 + 8].astype(int)
+    assert r > 150 and r > g, f"still stander is not red: {(b, g, r)}"
+
+
+def test_one_second_of_standing_is_not_yet_red():
+    """The scale is absolute: a moment's pause must not light up like a 10 s dwell."""
+    from tools.viz_tracks import draw_dwell_heat
+    visit = np.zeros((30, 40), np.float32); dwell = np.zeros((30, 40), np.float32)
+    visit[15, 20] = 10; dwell[15, 20] = 10
+    out = draw_dwell_heat(np.zeros((480, 640, 3), np.uint8), visit, dwell, full=100)
+    b, g, r = out[15 * 16 + 8, 20 * 16 + 8].astype(int)
+    assert g >= r, f"a 1 s pause rendered red: {(b, g, r)}"

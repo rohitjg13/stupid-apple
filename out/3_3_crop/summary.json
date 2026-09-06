@@ -1,0 +1,32 @@
+{
+  "video": "vid/3_3_crop.mp4",
+  "detector": "yolo",
+  "frames": 3506,
+  "duration_s": 116.9,
+  "1_entries_exits": {
+    "entered": 1,
+    "exited": 3,
+    "basis": "frame edge -- proxy; configure a door line for real store entries"
+  },
+  "2_footfall": {
+    "people_present_mean": 0.42,
+    "people_present_max": 2,
+    "distinct_people_tracked": 14,
+    "by_zone": "needs zones.json (--config)",
+    "by_time": "see footfall.csv"
+  },
+  "3_dwell": {
+    "people_who_stood_still_2s_or_more": 5,
+    "longest_still_s": 22.07,
+    "near": "image regions (see dwell.csv); named displays need zones.json"
+  },
+  "4_heatmap": {
+    "file": "heatmap.png",
+    "hottest": {
+      "x": 264,
+      "y": 328,
+      "region": "bottom-centre",
+      "foot_samples": 461
+    }
+  }
+}
