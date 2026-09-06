@@ -26,6 +26,26 @@ log = logging.getLogger(__name__)
 TENTATIVE, CONFIRMED, LOST, DELETED = "tentative", "confirmed", "lost", "deleted"
 
 
+class Grave:
+    """Where a confirmed track was last actually seen, and where it was heading.
+
+    Kept so that a person who walks behind a shelf and out the other side is
+    recognised as the same person rather than counted twice.
+    """
+
+    __slots__ = ("id", "box", "foot", "vel", "frame", "expires", "far_frames")
+
+    def __init__(self, track, frame, memory):
+        self.id = track.id
+        self.box = track.seen_box
+        x, y, w, h = track.seen_box
+        self.foot = (x + w / 2.0, y + h)
+        self.vel = track.kf.velocity
+        self.frame = frame
+        self.expires = frame + memory
+        self.far_frames = track.far_frames
+
+
 def iou_matrix(a, b):
     """Pairwise IoU between boxes (N,4) and (M,4), each (x, y, w, h). -> (N,M)."""
     if len(a) == 0 or len(b) == 0:
@@ -59,7 +79,7 @@ class Track:
     __slots__ = ("id", "kf", "state", "hits", "age", "time_since_update",
                  "shared_frames", "held", "trail", "recent", "seen_speed",
                  "travelled", "far_frames", "born_xy", "furniture", "box", "seen_box",
-                 "born_t", "last_t")
+                 "born_t", "last_t", "just_confirmed")
 
     def __init__(self, track_id, bbox, t, params):
         self.id = track_id
@@ -83,6 +103,7 @@ class Track:
         self.travelled = 0.0        # peak excursion, for reporting
         self.far_frames = 0         # frames measured a body width or more from birth
         self.furniture = False      # retired as a static object, not a person
+        self.just_confirmed = False
         self.box = tuple(float(v) for v in bbox)
         # Where they were last *measured*. After max_age frames of coasting the
         # predicted box is 180 px down the aisle from where the person actually
@@ -160,6 +181,7 @@ class Track:
             self.state = CONFIRMED          # a lost track was confirmed once already
         elif self.state == TENTATIVE and self.hits >= params.n_init:
             self.state = CONFIRMED
+            self.just_confirmed = True      # a candidate for re-link this frame
 
     def mark_shared(self, t):
         """This track has merged into a blob that was assigned to someone else.
@@ -217,7 +239,8 @@ class Tracker:
         self._next_id = 0
         self._frame = 0
         self._furniture = []        # [(box, expires_at_frame)] -- do not spawn here
-        self._graves = []           # [(box, expires_at_frame, far_frames)] of the dead
+        self._graves = []           # Grave objects, for re-linking after an occlusion
+        self.relinks = 0            # how many occluded people were recognised again
 
     # --- helpers ----------------------------------------------------------
     @staticmethod
@@ -239,11 +262,54 @@ class Tracker:
         # Born where a confirmed track just died? Same person, recycled id. They
         # inherit having walked, so standing still now does not make them furniture.
         if self._graves:
-            overlap = iou_matrix([g[0] for g in self._graves], [bbox])[:, 0]
+            overlap = iou_matrix([g.box for g in self._graves], [bbox])[:, 0]
             for gi in np.flatnonzero(overlap >= 0.3):
-                tr.far_frames = max(tr.far_frames, self._graves[gi][2])
+                tr.far_frames = max(tr.far_frames, self._graves[gi].far_frames)
         self.tracks.append(tr)
         return tr
+
+    def _relink_cost(self, grave, tr):
+        """How well a newly confirmed track explains a grave. None = not the same.
+
+        Motion and geometry only -- no appearance features, so this does not put
+        a face or a shirt colour anywhere near the pipeline.
+        """
+        p = self.p
+        gap = max(self._frame - grave.frame, 1)
+        fx, fy = tr.foot
+        dx, dy = fx - grave.foot[0], fy - grave.foot[1]
+        dist = (dx * dx + dy * dy) ** 0.5
+        if dist > p.relink_max_speed_px * gap:
+            return None                                 # nobody walks that fast
+        size = tr.box[3] / max(grave.box[3], 1.0)
+        if not (1.0 / p.relink_size_ratio <= size <= p.relink_size_ratio):
+            return None                                 # people do not change height
+        vx, vy = grave.vel
+        speed = (vx * vx + vy * vy) ** 0.5
+        if speed > 1.0 and dist > 1.0:
+            # They were walking somewhere when they vanished. Coming back out on
+            # the side they went in is a different person, not the same one.
+            if (dx * vx + dy * vy) / (dist * speed) < 0.0:
+                return None
+        return dist / gap                               # prefer the nearest, soonest
+
+    def _try_relink(self, tr):
+        best, cost = None, None
+        alive = {t.id for t in self.tracks}
+        for g in self._graves:
+            if g.id in alive:
+                continue
+            c = self._relink_cost(g, tr)
+            if c is not None and (cost is None or c < cost):
+                best, cost = g, c
+        if best is None:
+            return
+        tr.id = best.id                                 # the same person, continued
+        tr.far_frames = max(tr.far_frames, best.far_frames)
+        self._graves.remove(best)
+        self.relinks += 1
+        log.info("relinked after occlusion",
+                 extra={"track_id": tr.id, "gap_frames": self._frame - best.frame})
 
     # --- main -------------------------------------------------------------
     def update(self, blobs, t):
@@ -252,7 +318,7 @@ class Tracker:
         self.just_deleted = []
         self._frame += 1
         self._furniture = [(b, e) for b, e in self._furniture if e > self._frame]
-        self._graves = [g for g in self._graves if g[1] > self._frame]
+        self._graves = [g for g in self._graves if g.expires > self._frame]
         boxes, areas = self._boxes(blobs)
 
         for tr in self.tracks:
@@ -369,13 +435,17 @@ class Tracker:
                 tr.state = DELETED
                 self._furniture.append((tr.box, self._frame + p.furniture_memory))
 
+        for tr in self.tracks:
+            if tr.just_confirmed:
+                tr.just_confirmed = False
+                self._try_relink(tr)
+
         alive = []
         for tr in self.tracks:
             if tr.state == DELETED:
                 self.just_deleted.append(tr)
                 if not tr.furniture and tr.hits >= p.n_init:
-                    self._graves.append((tr.seen_box, self._frame + p.relink_memory,
-                                         tr.far_frames))
+                    self._graves.append(Grave(tr, self._frame, p.relink_memory))
             else:
                 alive.append(tr)
         self.tracks = alive

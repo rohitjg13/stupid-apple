@@ -81,7 +81,13 @@ class TrackerParams:
     # is the same person -- id churn, not a new arrival. The child inherits that
     # its predecessor walked here, so a shopper standing at a shelf whose track
     # got recycled is not mistaken for furniture. Ids stay ephemeral regardless.
-    relink_memory: int = 45             # 3 s at 15 fps
+    relink_memory: int = 60             # 4 s at 15 fps
+    # Re-identifying someone who was occluded, on motion and geometry alone --
+    # no appearance, no embeddings, so the privacy claim in docs/DPDP.md holds.
+    # A person cannot teleport, does not change size, and does not usually double
+    # back the instant they are out of sight.
+    relink_max_speed_px: float = 22.0   # px/frame ceiling on how far they could get
+    relink_size_ratio: float = 1.8      # box may differ by up to this factor
 
     # --- guards ---
     flood_area_frac: float = 0.40       # blob area over this fraction = bad frame

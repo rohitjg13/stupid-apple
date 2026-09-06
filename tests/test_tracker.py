@@ -78,7 +78,9 @@ def test_a_ten_frame_disappearance_keeps_the_same_id():
 
 
 def test_a_track_lost_for_longer_than_max_age_is_deleted():
-    p = TrackerParams(max_age=5)
+    # relink_memory=0 isolates deletion from the occlusion re-link, which would
+    # otherwise (correctly) hand the same id back.
+    p = TrackerParams(max_age=5, relink_memory=0)
     _, ids = run(sc.occlusion(n=40, gap=(10, 30)), params=p)
     assert ids[-1] == [1], "expected a fresh id after the track aged out"
 
@@ -407,3 +409,85 @@ def test_size_still_follows_measurements():
         kf.update((100, 200, 60, 180))
     assert kf.bbox[2] == pytest.approx(60, abs=3)
     assert kf.bbox[3] == pytest.approx(180, abs=5)
+
+
+# --- re-identification after an occlusion -------------------------------------
+# Motion and geometry only: no appearance, no embeddings, so docs/DPDP.md holds.
+
+def occluded_walk(before=12, gap=40, after=12, dx=8, y=200, w=40, h=136, x0=100):
+    """Walk right, vanish behind a shelf for `gap` frames, come out still walking."""
+    boxes = [[(x0 + dx * i, y, w, h)] for i in range(before)]
+    boxes += [[] for _ in range(gap)]
+    resume = x0 + dx * (before + gap)
+    boxes += [[(resume + dx * i, y, w, h)] for i in range(after)]
+    return boxes
+
+
+def test_a_person_behind_a_shelf_keeps_their_id():
+    """Longer than max_age, so coasting alone cannot do it."""
+    tk, ids = run(occluded_walk(gap=40), params=TrackerParams(max_age=15))
+    assert ids[-1] == [0], f"came back as a new person: {ids[-1]}"
+    assert tk.relinks == 1
+
+
+def test_the_gap_can_be_much_longer_than_max_age():
+    p = TrackerParams(max_age=10, relink_memory=120)
+    _, ids = run(occluded_walk(gap=90), params=p)
+    assert ids[-1] == [0]
+
+
+def test_beyond_the_relink_window_they_are_a_new_person():
+    """Memory has to expire, or two shoppers an hour apart become one."""
+    p = TrackerParams(max_age=10, relink_memory=20)
+    _, ids = run(occluded_walk(gap=60), params=p)
+    assert ids[-1] != [0]
+
+
+def test_someone_who_reappears_impossibly_far_away_is_not_relinked():
+    p = TrackerParams(max_age=10, relink_max_speed_px=5.0)
+    boxes = [[(100 + 8 * i, 200, 40, 136)] for i in range(12)]
+    boxes += [[] for _ in range(10)]
+    boxes += [[(1200 + 8 * i, 200, 40, 136)] for i in range(12)]   # across the store
+    _, ids = run(boxes, params=p)
+    assert ids[-1] != [0]
+
+
+def test_someone_much_smaller_is_a_different_person():
+    """A child where an adult vanished is not the adult."""
+    p = TrackerParams(max_age=10)
+    boxes = [[(100 + 8 * i, 200, 40, 136)] for i in range(12)]
+    boxes += [[] for _ in range(10)]
+    boxes += [[(210 + 8 * i, 300, 18, 40)] for i in range(12)]
+    _, ids = run(boxes, params=p)
+    assert ids[-1] != [0]
+
+
+def test_coming_back_out_the_way_they_went_in_is_someone_else():
+    """Walking right, vanishing, then appearing *behind* where they vanished."""
+    p = TrackerParams(max_age=10)
+    boxes = [[(300 + 8 * i, 200, 40, 136)] for i in range(12)]     # heading right
+    boxes += [[] for _ in range(10)]
+    boxes += [[(120 - 4 * i, 200, 40, 136)] for i in range(12)]    # appears to the left
+    _, ids = run(boxes, params=p)
+    assert ids[-1] != [0]
+
+
+def test_a_relinked_track_does_not_steal_a_live_persons_id():
+    p = TrackerParams(max_age=10)
+    # The second person walks slowly rather than standing perfectly still, or the
+    # furniture filter retires them and the test proves nothing.
+    other = lambda f: (400, 60 + 5 * f, 40, 136)
+    boxes = []
+    for i in range(12):                                             # two people
+        boxes.append([(100 + 8 * i, 200, 40, 136), other(i)])
+    for i in range(12, 22):                                         # one vanishes
+        boxes.append([other(i)])
+    for i in range(22, 34):
+        boxes.append([(210 + 8 * (i - 22), 200, 40, 136), other(i)])
+    tk, ids = run(boxes, params=p)
+    assert len(set(ids[-1])) == 2, f"two people must stay two ids: {ids[-1]}"
+
+
+def test_an_unoccluded_walk_never_triggers_a_relink():
+    tk, _ = run(sc.linear_walk(n=40))
+    assert tk.relinks == 0

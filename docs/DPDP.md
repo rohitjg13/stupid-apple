@@ -9,10 +9,19 @@ does not collect personal data in the first place.
   explicitly runs `--stage-outputs`, which writes to a scratch directory and is
   never enabled on the demo path.
 - **No faces.** There is no face detection, no embedding, no recognition. The
-  pipeline sees foreground blobs from a background-subtraction mask at 320×240.
-- **No re-identification.** Track IDs are per-process integers starting at 0 and
-  reset on every restart. The same person on two visits is two unrelated tracks,
-  and nothing links a track to an identity.
+  detector emits a class label ("person") and a rectangle, nothing else. On the
+  FPGA path it is a background-subtraction mask at 320×240; on the Jetson path a
+  YOLO person detector. Either way the frame is discarded the moment boxes are
+  extracted, and every stage after that sees only `x, y, w, h`.
+- **No appearance-based re-identification.** Nothing about how a person *looks*
+  is ever computed, compared or stored: no embeddings, no colour histograms, no
+  gait or face signature. A shopper who walks behind a shelf and out the other
+  side is recognised as the same person within a few seconds, but only from
+  physics — where they were, how fast they were going, how tall the box is. That
+  re-link expires in seconds and cannot span a visit, a camera or a day.
+- **No identity across visits.** Track IDs are per-process integers starting at 0
+  and reset on every restart. The same person on two visits is two unrelated
+  tracks, and nothing links a track to an identity.
 - **No audio, no wifi/BLE probing, no POS card data.** The POS feed is a stub
   carrying basket size and amount only.
 
