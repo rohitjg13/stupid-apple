@@ -137,3 +137,108 @@ def test_no_drops_under_load(sink):
         sink.on_event(ev(float(i), "occupancy", {"count": i}, "overhead"))
     sink.drain()
     assert sink.db.query_one("SELECT COUNT(*) AS n FROM occupancy")["n"] == 500
+
+
+def test_heatmap_tiles_accumulate_in_a_bucket(sink):
+    """(run_id, t_bucket, gx, gy) is a primary key: a repeated tile has to add,
+    not raise and roll the whole batch back."""
+    sink.on_event(ev(0, "heatmap", {"t_bucket": 5, "tiles": [[1, 2, 3]]}, "overhead"))
+    sink.on_event(ev(10, "heatmap", {"t_bucket": 5, "tiles": [[1, 2, 4]]}, "overhead"))
+    sink.drain()
+    rows = sink.db.query("SELECT gx, gy, count FROM heatmap")
+    assert rows == [{"gx": 1, "gy": 2, "count": 7}]
+    assert sink.db.dropped == 0
+
+
+def test_repeated_tiles_within_one_event_accumulate(sink):
+    sink.on_event(ev(0, "heatmap", {"t_bucket": 5, "tiles": [[1, 1, 2], [1, 1, 3]]},
+                     "overhead"))
+    sink.drain()
+    assert sink.db.query_one("SELECT count FROM heatmap")["count"] == 5
+
+
+def test_start_run_can_be_called_again_for_the_same_segment(sink):
+    """Re-running a demo segment must not fail on the run primary key."""
+    sink.start_run("demo-01", "sim", 1.0)
+    sink.start_run("demo-01", "sim", 2.0)
+    sink.on_event(ev(1.0, "occupancy", {"count": 1}, "overhead"))
+    sink.drain()
+    rows = sink.db.query("SELECT started FROM run WHERE run_id='run-1'")
+    assert rows == [{"started": 2.0}]
+    assert sink.db.query_one("SELECT COUNT(*) AS n FROM occupancy")["n"] == 1
+    assert sink.db.dropped == 0
+
+
+def test_ten_thousand_events_through_the_bus_are_not_dropped(tmp_path):
+    """The plan's W1 §1 acceptance test, end to end through the real bus.
+
+    The bus is given room for the burst on purpose — see the test below for
+    what the default does — so that what this measures is the sink and the DB.
+    """
+    from core.bus import Bus
+
+    db = DB(tmp_path / "load.db", batch_interval_s=0.05)
+    sink = Sink(db, "run-load")
+    bus = Bus(maxsize=20_000)
+    sink.subscribe(bus)
+    try:
+        for i in range(10_000):
+            bus.publish(ev(float(i), "occupancy", {"count": i % 40}, "overhead"))
+        bus.drain()
+        sink.drain(timeout=60.0)
+        assert bus.dropped == 0
+        assert db.dropped == 0
+        assert db.query_one("SELECT COUNT(*) AS n FROM occupancy")["n"] == 10_000
+        assert db.integrity_check() == "ok"
+    finally:
+        db.close()
+
+
+def test_default_bus_drops_a_ten_thousand_event_burst(tmp_path):
+    """Documents a cross-module limit, not backend behaviour.
+
+    core/bus.py (Rohit) is a bounded queue of 256 per subscriber that drops the
+    newest event when full. At real frame rates that never fills, but a
+    `--fast` replay publishes far quicker than the sink commits, so the plan's
+    "no dropped events under busy_evening --fast" cannot be met by the backend
+    alone. If this test starts failing because the bus grew backpressure, that
+    is good news: delete it and raise the default in the test above.
+    """
+    from core.bus import Bus
+
+    db = DB(tmp_path / "burst.db", batch_interval_s=0.05)
+    sink = Sink(db, "run-burst")
+    bus = Bus()
+    sink.subscribe(bus)
+    try:
+        for i in range(10_000):
+            bus.publish(ev(float(i), "occupancy", {"count": i % 40}, "overhead"))
+        bus.drain()
+        sink.drain(timeout=60.0)
+        delivered = db.query_one("SELECT COUNT(*) AS n FROM occupancy")["n"]
+        assert bus.dropped > 0                      # the bus, not the sink
+        assert db.dropped == 0                      # everything delivered landed
+        assert delivered + bus.dropped == 10_000    # and nothing vanished silently
+    finally:
+        db.close()
+
+
+def test_unhandled_event_type_is_logged_not_raised(sink, caplog):
+    class Odd:
+        event_type = "something_new"
+        t, zone_id, payload = 1.0, None, {}
+
+    sink.on_event(Odd())
+    sink.drain()
+    assert sink.db.dropped == 0
+
+
+def test_every_frozen_event_type_has_a_sink_branch(sink):
+    """If SHARED.md §5 grows a type, this test is what notices."""
+    from core.events import EVENT_TYPES
+    handled = {
+        "tripwire", "occupancy", "visit", "heatmap", "shelf_fill",
+        "stockout_start", "stockout_end", "planogram_violation", "lane_occ",
+        "queue_estimate", "pos_txn", "alert",
+    }
+    assert set(EVENT_TYPES) == handled

@@ -116,18 +116,43 @@ CREATE TABLE IF NOT EXISTS sync_state (
   last_bucket INTEGER
 );
 
--- Every t column is indexed; every aggregate filters on time.
-CREATE INDEX IF NOT EXISTS idx_tripwire_t ON tripwire(t);
-CREATE INDEX IF NOT EXISTS idx_occupancy_t ON occupancy(t);
-CREATE INDEX IF NOT EXISTS idx_visit_enter ON visit(t_enter);
-CREATE INDEX IF NOT EXISTS idx_visit_exit ON visit(t_exit);
-CREATE INDEX IF NOT EXISTS idx_heatmap_bucket ON heatmap(t_bucket);
+-- Indexing follows the shape of every aggregate: `WHERE run_id = ? AND t
+-- BETWEEN ? AND ?`. A bare index on `t` is not enough once the 7-day backfill
+-- and the demo run share a time range in one file — SQLite then walks every
+-- store's rows and filters run_id per row. The composites below are what keep
+-- the aggregates inside the 200 ms board budget.
+--
+-- The superseded single-column indexes are dropped rather than left in place:
+-- on an SD card every redundant index is write amplification on the hot path.
+DROP INDEX IF EXISTS idx_tripwire_t;
+DROP INDEX IF EXISTS idx_occupancy_t;
+DROP INDEX IF EXISTS idx_visit_enter;
+DROP INDEX IF EXISTS idx_visit_exit;
+DROP INDEX IF EXISTS idx_heatmap_bucket;
+DROP INDEX IF EXISTS idx_stockout_start;
+DROP INDEX IF EXISTS idx_stockout_end;
+DROP INDEX IF EXISTS idx_planogram_t;
+DROP INDEX IF EXISTS idx_queue_estimate_t;
+DROP INDEX IF EXISTS idx_pos_txn_t;
+DROP INDEX IF EXISTS idx_alert_t;
+
+CREATE INDEX IF NOT EXISTS idx_occupancy_run_t   ON occupancy(run_id, t);
+CREATE INDEX IF NOT EXISTS idx_tripwire_run_t    ON tripwire(run_id, dir, t);
+CREATE INDEX IF NOT EXISTS idx_visit_run_enter   ON visit(run_id, t_enter);
+CREATE INDEX IF NOT EXISTS idx_stockout_run      ON stockout(run_id, t_start);
+CREATE INDEX IF NOT EXISTS idx_planogram_run_t   ON planogram_violation(run_id, t);
+CREATE INDEX IF NOT EXISTS idx_queue_est_run     ON queue_estimate(run_id, lane, t);
+CREATE INDEX IF NOT EXISTS idx_pos_txn_run_t     ON pos_txn(run_id, t);
+CREATE INDEX IF NOT EXISTS idx_alert_run         ON alert(run_id, acked, t);
+CREATE INDEX IF NOT EXISTS idx_shelf_fill_run_t  ON shelf_fill(run_id, t);
+CREATE INDEX IF NOT EXISTS idx_lane_occ_run_t    ON lane_occ(run_id, t);
+
+-- heatmap and kpi_15m are covered by their primary keys. A (run_id, gx, gy)
+-- index was tried for the per-cell GROUP BY and measured no faster: SQLite
+-- still builds a temp B-tree, so it was pure write cost. What actually makes
+-- that query cheap is rolling the 10-second buckets up (see db.rollup).
+-- Retention and rollup delete by time across every run, so shelf_fill and
+-- lane_occ keep a bare `t` index as well; queue_truth is keyed by clip, not run.
 CREATE INDEX IF NOT EXISTS idx_shelf_fill_t ON shelf_fill(t);
-CREATE INDEX IF NOT EXISTS idx_stockout_start ON stockout(t_start);
-CREATE INDEX IF NOT EXISTS idx_stockout_end ON stockout(t_end);
-CREATE INDEX IF NOT EXISTS idx_planogram_t ON planogram_violation(t);
 CREATE INDEX IF NOT EXISTS idx_lane_occ_t ON lane_occ(t);
-CREATE INDEX IF NOT EXISTS idx_queue_estimate_t ON queue_estimate(t);
-CREATE INDEX IF NOT EXISTS idx_queue_truth_t ON queue_truth(t);
-CREATE INDEX IF NOT EXISTS idx_pos_txn_t ON pos_txn(t);
-CREATE INDEX IF NOT EXISTS idx_alert_t ON alert(t);
+CREATE INDEX IF NOT EXISTS idx_queue_truth_t ON queue_truth(clip, t);

@@ -30,8 +30,12 @@ class Sink:
         self.run_id = run_id
 
     def start_run(self, store_id, clipset, t):
-        self.db.insert("run", {"run_id": self.run_id, "store_id": store_id,
-                               "started": t, "clipset": clipset})
+        # REPLACE, not INSERT: re-running a demo segment (or the backfill) with
+        # the same run_id must not blow up on the primary key and roll back the
+        # events batched behind it.
+        self.db.enqueue(
+            "INSERT OR REPLACE INTO run (run_id, store_id, started, clipset) "
+            "VALUES (?, ?, ?, ?)", (self.run_id, store_id, t, clipset))
 
     def on_event(self, event):
         rid = self.run_id
@@ -47,9 +51,14 @@ class Sink:
                                      "zone": z, "t_enter": p["t_enter"],
                                      "t_exit": p["t_exit"]})
         elif et == "heatmap":
+            # (run_id, t_bucket, gx, gy) is the primary key, so two heatmap
+            # events landing in the same bucket accumulate instead of failing.
             for gx, gy, count in p["tiles"]:
-                self.db.insert("heatmap", {"run_id": rid, "t_bucket": p["t_bucket"],
-                                           "gx": gx, "gy": gy, "count": count})
+                self.db.enqueue(
+                    "INSERT INTO heatmap (run_id, t_bucket, gx, gy, count) "
+                    "VALUES (?, ?, ?, ?, ?) ON CONFLICT(run_id, t_bucket, gx, gy) "
+                    "DO UPDATE SET count = count + excluded.count",
+                    (rid, p["t_bucket"], gx, gy, count))
         elif et == "shelf_fill":
             self.db.insert("shelf_fill", {"run_id": rid, "t": t, "roi": z,
                                           "fill": p["fill"]})

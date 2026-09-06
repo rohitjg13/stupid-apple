@@ -2,8 +2,9 @@
 
 The board runs on an SD card: WAL + synchronous=NORMAL + one transaction per
 second (not per event) keeps writes fast and survives a power pull without
-corrupting the file. Readers use their own short-lived connections so the
-analytics pipeline can publish while the dashboard is querying.
+corrupting the file. Readers get their own connection per thread, cached and
+kept open, so the analytics pipeline can publish while the dashboard queries and
+neither pays to reopen the file.
 
 `run_id` is set once per demo segment so each clip shows clean numbers
 (tools/reset_run.py). Retention drops raw shelf/lane samples after 7 days and
@@ -24,6 +25,7 @@ SCHEMA = Path(__file__).with_name("schema.sql").read_text()
 
 RETENTION_S = 7 * 86400
 ROLLUP_S = 3600
+HEATMAP_BUCKET_S = 900   # roll 10 s tiles up to the kpi_15m grain
 
 
 class DB:
@@ -39,6 +41,10 @@ class DB:
         self._thread = None
         self._stop = threading.Event()
         self._conn = None
+        self._error = None
+        self._local = threading.local()
+        self._readers = []
+        self._readers_lock = threading.Lock()
         self.dropped = 0
 
         self._init()
@@ -126,8 +132,39 @@ class DB:
             self._conn.rollback()
             if self._error is None:
                 self._error = e
-            log.exception("db commit failed", extra={"statements": len(batch)})
+            return self._commit_one_by_one(batch, e)
+
+    def _commit_one_by_one(self, batch, cause):
+        """Re-apply a failed batch statement by statement.
+
+        Acceptance criterion is *zero dropped events*: one malformed row must
+        not take the other 499 in its transaction down with it. Only the
+        offending statements are counted in `dropped`.
+
+        Logging is one summary line per batch, not one per statement: a
+        systematically bad insert would otherwise fill the board's log faster
+        than the events it is complaining about.
+        """
+        cur = self._conn.cursor()
+        failed = []
+        for sql, params in batch:
+            try:
+                cur.execute(sql, params)
+            except sqlite3.Error:
+                failed.append(sql)
+        try:
+            self._conn.commit()
+        except sqlite3.Error as e:
+            self._conn.rollback()
+            self.dropped += len(batch)
+            log.error("db retry commit failed", extra={
+                "statements": len(batch), "error": str(e)})
             return False
+        self.dropped += len(failed)
+        log.warning("db batch partially applied", extra={
+            "statements": len(batch), "failed": len(failed),
+            "error": str(cause), "example_sql": failed[0] if failed else None})
+        return False
 
     def enqueue(self, sql, params=()):
         self._start()
@@ -179,13 +216,41 @@ class DB:
             if self._thread is not None:
                 self._thread.join(timeout)
             self._thread = None
+            self._close_readers()
+
+    def _close_readers(self):
+        with self._readers_lock:
+            readers, self._readers = self._readers, []
+        for conn in readers:
+            try:
+                conn.close()
+            except sqlite3.Error:       # already closed, or another thread's
+                pass
+        self._local = threading.local()
     # ---- reads ------------------------------------------------------------
+    def _reader(self):
+        """One read connection per thread, kept open.
+
+        `live_summary` alone is six queries; opening a connection and replaying
+        the PRAGMAs for each one costs more than the queries do. SQLite objects
+        are thread-bound, so the cache is thread-local, and WAL means a reader
+        never blocks the writer.
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self.path, timeout=30.0)
+            conn.row_factory = sqlite3.Row
+            # Per-connection, and only meaningful for writes, but keeping every
+            # connection on the same setting means one PRAGMA answers for the
+            # whole store rather than depending on which one you asked.
+            conn.execute("PRAGMA synchronous=NORMAL")
+            self._local.conn = conn
+            with self._readers_lock:
+                self._readers.append(conn)
+        return conn
+
     def query(self, sql, params=()):
-        conn = self._connect()
-        try:
-            return [dict(r) for r in conn.execute(sql, params)]
-        finally:
-            conn.close()
+        return [dict(r) for r in self._reader().execute(sql, params)]
 
     def query_one(self, sql, params=()):
         rows = self.query(sql, params)
@@ -239,6 +304,27 @@ class DB:
                 conn.execute(
                     "INSERT INTO lane_occ (run_id, t, lane, cells) VALUES (?, ?, ?, ?)",
                     (run_id, bucket, lane, mean))
+
+            # heatmap: 10-second tiles summed into 15-minute ones. Counts add,
+            # they do not average, so the totals the chart shows are unchanged
+            # by the rollup — only the resolution in time is. A demo day drops
+            # from ~86k rows to ~96 buckets per occupied cell, which is what
+            # keeps the whole-day query inside the board budget.
+            rows = conn.execute(
+                "SELECT run_id, CAST(t_bucket / ? AS INTEGER) * ? AS bucket, "
+                "gx, gy, SUM(count) AS n FROM heatmap "
+                "WHERE t_bucket >= ? AND t_bucket < ? "
+                "GROUP BY run_id, bucket, gx, gy",
+                (HEATMAP_BUCKET_S, HEATMAP_BUCKET_S, lo, hi)).fetchall()
+            conn.execute("DELETE FROM heatmap WHERE t_bucket >= ? AND t_bucket < ?",
+                         (lo, hi))
+            for run_id, bucket, gx, gy, n in rows:
+                conn.execute(
+                    "INSERT INTO heatmap (run_id, t_bucket, gx, gy, count) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(run_id, t_bucket, gx, gy) "
+                    "DO UPDATE SET count = count + excluded.count",
+                    (run_id, bucket, gx, gy, n))
 
         self.call(_rollup)
         return self
