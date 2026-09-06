@@ -45,6 +45,25 @@ class Aggregates:
             "GROUP BY d ORDER BY d DESC LIMIT ?", (run_id or self.run_id, n))
         return [{"day": r["d"], "entries": r["n"]} for r in rows]
 
+    def footfall_totals(self, run_id=None):
+        """Entries and exits for the whole run. The dashboard's headline tile."""
+        rows = self.db.query(
+            "SELECT dir, COUNT(*) AS n FROM tripwire WHERE run_id = ? GROUP BY dir",
+            self._runs(run_id))
+        counts = {r["dir"]: r["n"] for r in rows}
+        return {"entries": counts.get("in", 0), "exits": counts.get("out", 0)}
+
+    def run_window(self, run_id=None):
+        """(t0, t1) covering every event in the run, so callers can ask for 'all'."""
+        row = self.db.query_one(
+            "SELECT MIN(t) AS t0, MAX(t) AS t1 FROM ("
+            "  SELECT t FROM occupancy WHERE run_id = ?1"
+            "  UNION ALL SELECT t FROM tripwire WHERE run_id = ?1"
+            "  UNION ALL SELECT t FROM shelf_fill WHERE run_id = ?1"
+            "  UNION ALL SELECT t_exit AS t FROM visit WHERE run_id = ?1)",
+            self._runs(run_id)) or {}
+        return {"t0": row.get("t0"), "t1": row.get("t1")}
+
     # ---- dwell ------------------------------------------------------------
     def dwell_by_zone(self, t0, t1, run_id=None):
         rows = self.db.query(
@@ -79,6 +98,36 @@ class Aggregates:
             "AND t_end IS NOT NULL ORDER BY t_start",
             (run_id or self.run_id, t0, t1))
         return [dict(r) for r in rows]
+
+    def shelf_state(self, run_id=None):
+        """Latest fill per facing, plus whether it is currently out of stock."""
+        rows = self.db.query(
+            "SELECT s.roi, s.t, s.fill FROM shelf_fill s WHERE s.run_id = ?1 "
+            "AND s.t = (SELECT MAX(t) FROM shelf_fill WHERE run_id = ?1 AND roi = s.roi) "
+            "GROUP BY s.roi ORDER BY s.roi", self._runs(run_id))
+        open_ = {r["roi"] for r in self.db.query(
+            "SELECT DISTINCT roi FROM stockout WHERE run_id = ? AND t_end IS NULL",
+            self._runs(run_id))}
+        return [{"roi": r["roi"], "t": r["t"], "fill": r["fill"],
+                 "stockout": r["roi"] in open_} for r in rows]
+
+    def lost_revenue(self, now, planogram=None, run_id=None):
+        """Rupees of sales missed while facings were empty, open incidents included.
+
+        hours_empty * expected_sales_per_hour * unit_price, summed. This is the
+        number the demo ticks up while a facing stays empty, so an open
+        stock-out is charged up to `now` rather than skipped.
+        """
+        rows = self.db.query(
+            "SELECT sku, t_start, t_end FROM stockout WHERE run_id = ?",
+            self._runs(run_id))
+        rates = {p["sku"]: p.get("expected_sales_per_hour", 0) * p.get("unit_price", 0)
+                 for p in (planogram or [])}
+        total = 0.0
+        for r in rows:
+            end = r["t_end"] if r["t_end"] is not None else now
+            total += max(0.0, end - r["t_start"]) / 3600.0 * rates.get(r["sku"], 0)
+        return round(total, 2)
 
     def replenishment_list(self, run_id=None, planogram=None):
         """Open stock-outs sorted by revenue rate (hours_empty * sales/h * price).

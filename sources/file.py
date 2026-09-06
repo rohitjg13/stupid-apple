@@ -16,22 +16,44 @@ log = logging.getLogger(__name__)
 
 
 class FileSource(Source):
-    """One reader per stream. `loop` replays the clip; frame_id keeps counting."""
+    """One reader per stream. `loop` replays the clip; frame_id keeps counting.
+
+    `paths: [a.mp4, b.mp4]` in store.yaml plays several clips back to back as
+    one continuous stream, which is what uploading a few videos means.
+    """
 
     def __init__(self, cfg, stream="overhead", realtime=True, decode=True):
         spec = cfg.streams[stream]
-        self.path = Path(spec["path"])
-        if not self.path.exists():
-            raise FileNotFoundError(f"{stream} clip not found: {self.path}")
+        paths = spec.get("paths") or [spec["path"]]
+        self.paths = [Path(p) for p in paths]
+        for p in self.paths:
+            if not p.exists():
+                raise FileNotFoundError(f"{stream} clip not found: {p}")
+        self.path = self.paths[0]
         self.stream = stream
         self.fps = float(spec.get("fps", 15))
         self.loop = bool(spec.get("loop", False))
         self.realtime = realtime
         self.decode = decode
-        self._cap = cv2.VideoCapture(str(self.path))
-        if not self._cap.isOpened():
-            raise RuntimeError(f"cannot decode {self.path}; try tools/transcode.sh")
+        self._clip = 0
+        self._cap = self._open(self.path)
         self._closed = False
+
+    def _open(self, path):
+        cap = cv2.VideoCapture(str(path))
+        if not cap.isOpened():
+            raise RuntimeError(f"cannot decode {path}; try tools/transcode.sh")
+        return cap
+
+    @property
+    def total_frames(self):
+        """Frames across every clip; 0 when the container does not say."""
+        n = 0
+        for p in self.paths:
+            cap = cv2.VideoCapture(str(p))
+            n += max(0, int(cap.get(cv2.CAP_PROP_FRAME_COUNT)))
+            cap.release()
+        return n
 
     def frames(self):
         dt = 1.0 / max(self.fps, 1e-6)
@@ -40,13 +62,20 @@ class FileSource(Source):
         while not self._closed:
             ok, img = self._cap.read()
             if not ok:
+                if self._clip + 1 < len(self.paths):        # next clip in the playlist
+                    self._clip += 1
+                    self._cap.release()
+                    self._cap = self._open(self.paths[self._clip])
+                    continue
                 if not self.loop:
                     log.info("clip exhausted", extra={"stream": self.stream, "frames": frame_id})
                     return
-                self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                self._clip = 0
+                self._cap.release()
+                self._cap = self._open(self.paths[0])
                 ok, img = self._cap.read()
                 if not ok:
-                    log.error("clip will not rewind", extra={"path": str(self.path)})
+                    log.error("clip will not rewind", extra={"path": str(self.paths[0])})
                     return
 
             r = np.zeros(1, dtype=FRAME_RESULT_DT)[0]

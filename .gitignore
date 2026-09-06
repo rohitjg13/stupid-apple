@@ -40,3 +40,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Runtime uploads, database and generated clipsets
+data/
+
+# The dashboard ships built so a board with no npm can still serve it
+!web/dist

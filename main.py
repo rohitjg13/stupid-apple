@@ -87,15 +87,28 @@ def check_backend(backend):
                          "refusing to start (use --backend reference deliberately)")
 
 
-def capture(src, q, stop):
-    for frame in src.frames():
-        if stop.is_set():
-            break
-        try:
-            q.put(frame, timeout=1.0)
-        except queue.Full:
-            log.warning("analytics behind, dropping frame", extra={"frame_id": frame.frame_id})
-    q.put(None)
+def capture(src, q, stop, drop=True):
+    """`drop` is for live sources only: a camera cannot wait, a file can.
+
+    Dropping frames out of a file is pure loss -- there is no clock to keep up
+    with -- and it silently changes the counts a run reports, so offline
+    processing blocks instead.
+    """
+    try:
+        for frame in src.frames():
+            if stop.is_set():
+                break
+            while not stop.is_set():
+                try:
+                    q.put(frame, timeout=1.0)
+                    break
+                except queue.Full:
+                    if drop:
+                        log.warning("analytics behind, dropping frame",
+                                    extra={"frame_id": frame.frame_id})
+                        break
+    finally:
+        q.put(None)
 
 
 def write_health(path, payload):
@@ -114,7 +127,14 @@ def write_health(path, payload):
 
 def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
         streams=("overhead", "shelf"), stop=None, clock=None, health_file=None,
-        clock_state="/var/lib/retail/clock.json", seed=0):
+        clock_state="/var/lib/retail/clock.json", seed=0, db_path=None, run_id=None,
+        on_progress=None):
+    """`db_path` persists every event through backend/sink.py under `run_id`.
+
+    `on_progress(processed, total)` is called about once a second of footage, so
+    a caller driving this from a web request can show a bar. `total` is 0 when
+    the source cannot say how long it is (a camera).
+    """
     cfg = load_clipset(config)
     check_backend(backend)
     bus = bus or Bus()
@@ -124,8 +144,19 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
                                cfg, s, seed=seed)
                for s in streams}
     be = build_backend(backend, cfg)
+
+    db = sink = None
+    if db_path:
+        from backend.db import DB
+        from backend.sink import Sink
+        db = DB(db_path)
+        sink = Sink(db, run_id or f"run-{int(time.time())}").subscribe(bus)
+        sink.start_run(cfg.store_id, str(cfg.path), time.time())
+
+    total = sum(getattr(src, "total_frames", 0) for src in sources.values())
     q = queue.Queue(maxsize=2)
-    threads = [threading.Thread(target=capture, args=(src, q, stop), daemon=True, name=f"cap-{s}")
+    threads = [threading.Thread(target=capture, args=(src, q, stop, realtime),
+                                daemon=True, name=f"cap-{s}")
                for s, src in sources.items()]
     for t in threads:
         t.start()
@@ -145,6 +176,10 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
     epoch_base, ns_base = clock.now(), {}      # per stream: each has its own t_ns origin
     last_health = 0.0
     t_wall = time.monotonic()
+    queue_pipe = None
+    if cfg.lanes:
+        from backend.pipeline import BackendPipeline
+        queue_pipe = BackendPipeline(cfg, bus, seed=seed)
     shelf_pipe = None
     if "shelf" in streams and cfg.rois and cfg.planogram:
         from shelf.pipeline import ShelfPipeline
@@ -164,6 +199,8 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
 
         if frame.stream == "overhead":
             shopper.on_frame(frame, t)
+            if queue_pipe is not None:
+                queue_pipe.on_frame(t, frame.result)
         else:
             for roi_id, i in cfg.roi_index.items():
                 if t - last_pub.get(roi_id, -1e9) >= 1.0:
@@ -174,6 +211,8 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
                 shelf_pipe.process_frame(t=t, result=frame.result, image=frame.image)
 
         processed += 1
+        if on_progress is not None and processed % 15 == 0:
+            on_progress(processed, total)
         if t - last_health >= 10.0:
             last_health = t
             clock.persist()
@@ -189,6 +228,11 @@ def run(config, source="sim", backend="sim", frames=0, realtime=True, bus=None,
     shopper.close()
     for src in sources.values():
         src.close()
+    if db is not None:
+        bus.drain()                      # every event reaches the sink...
+        db.close()                       # ...and every insert reaches the file
+    if on_progress is not None:
+        on_progress(processed, total)
     clock.persist()
     write_health(health_file, dict(clock.health(), frames=processed, store_id=cfg.store_id,
                                    backend=backend, source=source, streams=list(streams),
@@ -208,6 +252,8 @@ def main(argv=None):
     p.add_argument("--health-file", default=None, help="JSON status for the backend /health")
     p.add_argument("--clock-state", default="/var/lib/retail/clock.json")
     p.add_argument("--seed", type=int, default=0, help="sim determinism")
+    p.add_argument("--db", default=None, help="persist events to this SQLite file")
+    p.add_argument("--run-id", default=None, help="tag rows with this run id")
     rt = p.add_mutually_exclusive_group()
     rt.add_argument("--realtime", dest="realtime", action="store_true", default=True)
     rt.add_argument("--fast", dest="realtime", action="store_false")
@@ -226,7 +272,7 @@ def main(argv=None):
     try:
         run(a.config, a.source, a.backend, a.frames, a.realtime and not a.headless,
             bus=bus, stop=stop, health_file=a.health_file, clock_state=a.clock_state,
-            seed=a.seed)
+            seed=a.seed, db_path=a.db, run_id=a.run_id)
     finally:
         bus.drain()
     return 0

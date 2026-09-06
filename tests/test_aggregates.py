@@ -129,3 +129,57 @@ def test_stores_returns_distinct_store_ids(agg):
     agg.db.insert("run", {"run_id": "r2", "store_id": "demo-02", "started": 0.0, "clipset": "sim"})
     agg.db.drain()
     assert set(agg.stores()) == {"demo-01", "demo-02"}
+
+
+# ---- dashboard composition (server.py) ------------------------------------
+
+def test_footfall_totals_splits_entries_from_exits(agg):
+    for t, d in ((1.0, "in"), (2.0, "in"), (3.0, "out")):
+        agg.db.insert("tripwire", {"run_id": "r1", "t": t, "dir": d})
+    agg.db.drain()
+    assert agg.footfall_totals() == {"entries": 2, "exits": 1}
+
+
+def test_footfall_totals_on_an_empty_run(agg):
+    assert agg.footfall_totals() == {"entries": 0, "exits": 0}
+
+
+def test_run_window_spans_every_table(agg):
+    agg.db.insert("occupancy", {"run_id": "r1", "t": 50.0, "count": 1})
+    agg.db.insert("tripwire", {"run_id": "r1", "t": 10.0, "dir": "in"})
+    agg.db.insert("shelf_fill", {"run_id": "r1", "t": 90.0, "roi": "A1", "fill": 200})
+    agg.db.drain()
+    assert agg.run_window() == {"t0": 10.0, "t1": 90.0}
+
+
+def test_run_window_of_an_empty_run_is_none(agg):
+    assert agg.run_window() == {"t0": None, "t1": None}
+
+
+def test_shelf_state_is_the_latest_fill_per_facing(agg):
+    agg.db.insert("shelf_fill", {"run_id": "r1", "t": 1.0, "roi": "A1", "fill": 200})
+    agg.db.insert("shelf_fill", {"run_id": "r1", "t": 2.0, "roi": "A1", "fill": 30})
+    agg.db.insert("shelf_fill", {"run_id": "r1", "t": 2.0, "roi": "A2", "fill": 180})
+    agg.db.insert("stockout", {"run_id": "r1", "roi": "A1", "sku": "S1",
+                               "t_start": 2.0, "t_end": None})
+    agg.db.drain()
+    state = {r["roi"]: r for r in agg.shelf_state()}
+    assert state["A1"]["fill"] == 30 and state["A1"]["stockout"] is True
+    assert state["A2"]["fill"] == 180 and state["A2"]["stockout"] is False
+
+
+def test_lost_revenue_charges_open_stockouts_up_to_now(agg):
+    plan = [{"sku": "S1", "unit_price": 10, "expected_sales_per_hour": 6}]
+    agg.db.insert("stockout", {"run_id": "r1", "roi": "A1", "sku": "S1",
+                               "t_start": 0.0, "t_end": 3600.0})       # 1 h closed
+    agg.db.insert("stockout", {"run_id": "r1", "roi": "A2", "sku": "S1",
+                               "t_start": 3600.0, "t_end": None})      # 1 h and counting
+    agg.db.drain()
+    assert agg.lost_revenue(7200.0, plan) == pytest.approx(120.0)
+
+
+def test_lost_revenue_of_an_unpriced_sku_is_zero(agg):
+    agg.db.insert("stockout", {"run_id": "r1", "roi": "A1", "sku": "MYSTERY",
+                               "t_start": 0.0, "t_end": 3600.0})
+    agg.db.drain()
+    assert agg.lost_revenue(7200.0, []) == 0.0
